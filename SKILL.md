@@ -9,7 +9,39 @@ description: Operate a zk.money wallet from the terminal or from an agent - regi
 
 Install it on macOS or Linux (needs Node.js 20.10 or later and a signed-in `gh`) with `gh release download -R aztec-labs-eng/zkmoney-cli -p install.sh -O - | sh`, which puts `zkmoney` in `~/.local/bin`. Inside the zk.money wallet monorepo it also runs from source: `packages/cli/zkmoney/bin/zkmoney.mjs <command>` (or `pnpm --filter @obsidion/zkmoney-cli start -- <command>`). Add `ZKMONEY_DEBUG=1` to see the SDK's own logs.
 
-The Aztec node sits behind a gateway key: set `ZKMONEY_NODE_API_KEY` (or `zkmoney config set node.apiKey …`) before the first command that touches the chain.
+The Aztec node each profile names sits behind a gateway key: save it once per network (see Networks) before the first command that touches the chain.
+
+## Networks
+
+| Profile | Chains | Config profile |
+| --- | --- | --- |
+| `mainnet` (default) | Ethereum and Aztec mainnet | `https://cdn.zk.money/profiles/v5/current.json` |
+| `staging` (also `testnet`) | Sepolia and Aztec testnet | `https://cdn.staging.zk.money/profiles/v5/current.json` |
+
+The config profile carries the node, the L1 RPC, the account service and the contracts. It does not carry the key for Aztec Labs' node gateway, which answers 403 without one, so save each network's key once. Every setting but `profile` is kept per network:
+
+```sh
+zkmoney --profile mainnet config set node.apiKey <mainnet node key>
+zkmoney --profile staging config set node.apiKey <staging node key>
+zkmoney config set profile staging     # use staging from now on; `zkmoney config unset profile` returns to mainnet
+```
+
+`--profile` picks a network for one command and `ZKMONEY_PROFILE` for a shell. Each network keeps its own account under `~/.zkmoney/<network>/`, so its first use starts with `account init`. `node.url` can point at any other Aztec node on the same network instead, with no key.
+
+The staging key is the Preview environment's variable: `gh variable get WEB_WALLET_PREVIEW_NODE_API_KEY --env Preview -R aztec-labs-eng/obsidion-wallet`. The mainnet key is the production wallet's `WEB_WALLET_NODE_API_KEY` secret.
+
+**Testing against mainnet** moves real funds, so keep amounts small:
+
+```sh
+zkmoney --profile mainnet config set node.apiKey <mainnet node key>
+export ZKMONEY_PASSPHRASE=…            # seals the key file; every later command needs it
+zkmoney account init --key file        # back up ~/.zkmoney/mainnet/account.json with the passphrase
+zkmoney register <tag>                 # send the printed amount in DAI, USDC or USDT to the printed address
+zkmoney register <tag> --wait
+zkmoney balance
+zkmoney send 1 DAI --to <another tag> --idempotency-key smoke-1
+zkmoney withdraw 1 --to 0x… --idempotency-key smoke-wd-1 --wait
+```
 
 ## Before anything: an account
 
@@ -102,11 +134,11 @@ zkmoney contacts remove bob
 
 ```sh
 zkmoney config show                       # value and source of every setting
-zkmoney config set node.url https://…     # pin one; flag > env > file > profile
+zkmoney config set node.url https://…     # pin one for this network; flag > env > file > profile
 zkmoney config unset node.url
 ```
 
-Keys: `profile`, `profileUrl`, `node.url`, `node.apiKey`, `l1.rpc`, `accountService.url`, `addresses.{registry,portal,token,claimFpc}`, `defaults.{asset,withdrawAsset}`. Environment equivalents are `ZKMONEY_<KEY>` (`ZKMONEY_NODE_URL`, `ZKMONEY_L1_RPC`, …). `--profile testnet|sandbox` switches network for one command, `ZKMONEY_PROFILE` for a shell, `config set profile` until unset; mainnet is the default. Each network keeps its own account and store under `~/.zkmoney/<network>/`, so a network's first use starts with `account init`. `--home <dir>` moves everything.
+Keys: `profile`, `profileUrl`, `node.url`, `node.apiKey`, `l1.rpc`, `accountService.url`, `addresses.{registry,portal,token,claimFpc}`, `defaults.{asset,withdrawAsset}`. `profile` is kept for the home (`~/.zkmoney/config.json`); `config set` keeps every other key for the network in use (`~/.zkmoney/<network>/config.json`). Environment equivalents are `ZKMONEY_<KEY>` (`ZKMONEY_NODE_URL`, `ZKMONEY_L1_RPC`, …). `--home <dir>` moves everything.
 
 ## Reading the output
 
