@@ -22,4 +22,4 @@ zkmoney account init
 zkmoney register <tag>
 ```
 
-The full command reference, written for agents as much as for people, is the `SKILL.md` installed beside the CLI (`~/.local/share/zkmoney-cli/SKILL.md`).
+The full command reference, written for agents as much as for people, is [SKILL.md](SKILL.md); the install puts a copy beside the CLI (`~/.local/share/zkmoney-cli/SKILL.md`). Each release refreshes it here.
