@@ -6,7 +6,7 @@ This repository holds the releases.
 
 ## Install
 
-On macOS or Linux, x64 or arm64, with Node.js 20.10 or later and the GitHub CLI signed in to an account that can read this repository:
+On macOS or Linux, x64 or arm64, with Node.js 22 or later and the GitHub CLI signed in to an account that can read this repository:
 
 ```sh
 gh release download -R aztec-labs-eng/zkmoney-cli -p install.sh -O - | sh
