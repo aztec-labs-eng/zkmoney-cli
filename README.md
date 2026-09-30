@@ -2,7 +2,7 @@
 
 zk.money from the terminal: register a tag, receive deposits from Ethereum, pay tags, withdraw, make and claim paylinks, and watch the balance. It runs against Ethereum and Aztec mainnet by default and prints plain text, for people at a shell and for agents that run one.
 
-This repository holds the releases. The source is the `@obsidion/zkmoney-cli` package in the zk.money wallet monorepo, which builds and publishes them.
+This repository holds the releases. 
 
 ## Install
 
