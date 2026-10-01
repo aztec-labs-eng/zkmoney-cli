@@ -1,0 +1,2 @@
+# Prose is not hard-wrapped; the editor soft-wraps it.
+*.md

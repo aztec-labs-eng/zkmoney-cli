@@ -1,0 +1,45 @@
+{
+  "name": "@obsidion/zkmoney-cli",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "zkmoney": "./bin/zkmoney.mjs"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "start": "node bin/zkmoney.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "bundle": "node scripts/bundle.mjs",
+    "release": "node scripts/release.mjs"
+  },
+  "dependencies": {
+    "@aztec/aztec.js": "v5.2.0",
+    "@aztec/ethereum": "v5.2.0",
+    "@aztec/foundation": "v5.2.0",
+    "@aztec/pxe": "v5.2.0",
+    "@aztec/stdlib": "v5.2.0",
+    "@noble/curves": "^1.7.0",
+    "@obsidion/config-client": "workspace:*",
+    "@obsidion/contracts": "workspace:*",
+    "@obsidion/core": "workspace:*",
+    "@obsidion/front-core": "workspace:*",
+    "@obsidion/sdk": "workspace:*",
+    "@oxide/l1-contracts": "workspace:*",
+    "commander": "^12.1.0",
+    "viem": "npm:@aztec/viem@2.38.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "5.7.3",
+    "vitest": "^2.1.5",
+    "esbuild": "0.25.12",
+    "tsx": "^4.19.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@9.14.4+sha512.c8180b3fbe4e4bca02c94234717896b5529740a6cbadf19fa78254270403ea2f27d4e1d46a08a0f56c89b63dc8ebfd3ee53326da720273794e6200fcf0d184ab"
+}

@@ -7,7 +7,7 @@ description: Operate a zk.money wallet from the terminal or from an agent - regi
 
 `zkmoney` is a node CLI over the zk.money wallet SDK. It talks to Ethereum mainnet and Aztec mainnet by default, keeps its account and records under `~/.zkmoney/<network>/`, and prints plain text meant to be read; there is no JSON mode. Amounts are decimal strings in the asset's units (`"12.50"`), never base units.
 
-Install it on macOS or Linux (needs Node.js 20.10 or later and a signed-in `gh`) with `gh release download -R aztec-labs-eng/zkmoney-cli -p install.sh -O - | sh`, which puts `zkmoney` in `~/.local/bin`. Inside the zk.money wallet monorepo it also runs from source: `packages/cli/zkmoney/bin/zkmoney.mjs <command>` (or `pnpm --filter @obsidion/zkmoney-cli start -- <command>`). Add `ZKMONEY_DEBUG=1` to see the SDK's own logs.
+Install it on macOS or Linux (needs Node.js 22 or later and a signed-in `gh`) with `gh release download -R aztec-labs-eng/zkmoney-cli -p install.sh -O - | sh`, which puts `zkmoney` in `~/.local/bin`. From a source checkout (see the README), `cli/bin/zkmoney.mjs <command>` runs it from source. Add `ZKMONEY_DEBUG=1` to see the SDK's own logs.
 
 The Aztec node each profile names sits behind a gateway key: save it once per network (see Networks) before the first command that touches the chain.
 
@@ -18,13 +18,16 @@ The Aztec node each profile names sits behind a gateway key: save it once per ne
 | `mainnet` (default) | Ethereum and Aztec mainnet | `https://cdn.zk.money/profiles/v5/current.json` |
 | `staging` (also `testnet`) | Sepolia and Aztec testnet | `https://cdn.staging.zk.money/profiles/v5/current.json` |
 
-The config profile carries the node, the L1 RPC, the account service and the contracts. It does not carry the key for Aztec Labs' node gateway, which answers 403 without one, so save each network's key once. Every setting but `profile` is kept per network:
+The config profile carries the node, the L1 RPC, the account service and the contracts. It does not carry the key for Aztec Labs' node gateway, which answers 403 without one, so save each network's key once. On mainnet, also set your own Ethereum RPC: the profile's public one answers only recent blocks, and `balance`, deposits and registration scan older logs. Every setting but `profile` is kept per network:
 
 ```sh
 zkmoney --profile mainnet config set node.apiKey <mainnet node key>
+zkmoney --profile mainnet config set l1.rpc <an Ethereum RPC that serves historical logs>
 zkmoney --profile staging config set node.apiKey <staging node key>
 zkmoney config set profile staging     # use staging from now on; `zkmoney config unset profile` returns to mainnet
 ```
+
+The CLI builds against the wallet release mainnet runs. On staging that release's resolver scan finds no operator, so the CLI does not claim swept deposits or derive a new registration's address there; `balance` says so in a note and still prints the balance.
 
 `--profile` picks a network for one command and `ZKMONEY_PROFILE` for a shell. Each network keeps its own account under `~/.zkmoney/<network>/`, so its first use starts with `account init`. `node.url` can point at any other Aztec node on the same network instead, with no key.
 
@@ -34,6 +37,7 @@ The staging key is the Preview environment's variable: `gh variable get WEB_WALL
 
 ```sh
 zkmoney --profile mainnet config set node.apiKey <mainnet node key>
+zkmoney --profile mainnet config set l1.rpc <Ethereum RPC URL>
 export ZKMONEY_PASSPHRASE=…            # seals the key file; every later command needs it
 zkmoney account init --key file        # back up ~/.zkmoney/mainnet/account.json with the passphrase
 zkmoney register <tag>                 # send the printed amount in DAI, USDC or USDT to the printed address
