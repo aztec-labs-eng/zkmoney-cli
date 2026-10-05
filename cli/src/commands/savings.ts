@@ -86,6 +86,7 @@ function moveCommand(direction: "in" | "out"): Command {
             ["Move", id],
             ["Burned", amount(BigInt(move.amount), DEFAULT_DECIMALS, into ? "DAI" : "sUSDS")],
             ["Escrow", move.escrow],
+            ["Release tip", amount(BigInt(move.releaseTip), DEFAULT_DECIMALS, "DAI")],
             ["Escrow tip", amount(BigInt(move.escrowTip), DEFAULT_DECIMALS, "DAI")],
             ["Replayed", replayed ? "yes" : undefined],
           ]),

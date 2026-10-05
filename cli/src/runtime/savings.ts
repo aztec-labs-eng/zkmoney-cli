@@ -13,7 +13,7 @@ import { EthAddress } from "@aztec/aztec.js/addresses"
 import { Fr } from "@aztec/aztec.js/fields"
 import { AztecAddress } from "@aztec/stdlib/aztec-address"
 import { loadOxideManifestTuple } from "@obsidion/core/oxide"
-import { DEFAULT_DECIMALS, WITHDRAW_RELAYER_TIP } from "@obsidion/core/constants"
+import { DEFAULT_DECIMALS } from "@obsidion/core/constants"
 import {
   BroadcasterContract,
   TokenService,
@@ -21,6 +21,7 @@ import {
   buildSkyEscrowRunCall,
   nextOperationId,
   quoteSkyEscrowTip,
+  quoteSkyReleaseTip,
   readPortalWithdrawalState,
 } from "@obsidion/sdk"
 import {
@@ -154,13 +155,6 @@ export async function readSavings(sv: Runtime): Promise<SavingsPosition> {
 
 export const SAVINGS_MOVE_KIND = "savings-move"
 
-/**
- * The DAI tip a Savings-to-Main release offers. The Sky executor redeems before it pays, beyond the
- * plain release the withdrawal subsidy models, and its gas is not measured yet, so this is a flat
- * bound above the plain release tip.
- */
-const SKY_RELEASE_TIP = 3n * WITHDRAW_RELAYER_TIP
-
 export interface SavingsMove {
   direction: "in" | "out"
   /** The burn's withdrawal record. */
@@ -170,6 +164,8 @@ export interface SavingsMove {
   recipientCommitment: Hex
   /** What was burned, in the source token's base units: DAI moving in, sUSDS shares moving out. */
   amount: string
+  /** The DAI the release pays the relayer, beyond the withdrawal subsidy. */
+  releaseTip: string
   /** The DAI the escrow pays whoever runs it. */
   escrowTip: string
   /** The destination portal's deposit once the escrow has run, and whether this account claimed it. */
@@ -248,7 +244,12 @@ export async function moveThroughSky(
         symbol,
       )}`,
     )
-  const releaseTip = into ? WITHDRAW_RELAYER_TIP : SKY_RELEASE_TIP
+  const route = into ? SkyRoute.Stake : SkyRoute.Unstake
+  const { relayerTip: releaseTip } = await quoteSkyReleaseTip(
+    rt.l1 as never,
+    tuplePortal(source.tuple, "withdrawalSubsidy"),
+    route,
+  )
   const cut = await fpcFundingCut(source)
   const released = into
     ? input.amountAtomic - cut
@@ -276,7 +277,7 @@ export async function moveThroughSky(
       withdrawalSubsidy: tuplePortal(source.tuple, "withdrawalSubsidy"),
     },
     {
-      route: into ? SkyRoute.Stake : SkyRoute.Unstake,
+      route,
       escrowFunding,
       sender: factory.address,
     },
@@ -312,7 +313,7 @@ export async function moveThroughSky(
       withdrawalRelayerTip: releaseTip,
       proverTip: 0n,
       fpcFundingCut: cut,
-      route: into ? SkyRoute.Stake : SkyRoute.Unstake,
+      route,
       recipientCommitment,
       recoveryAccount: EthAddress.fromString(recoveryAccount),
       relayerTip: tip.relayerTip,
@@ -365,6 +366,7 @@ export async function moveThroughSky(
       nonce,
       recipientCommitment,
       amount: input.amountAtomic.toString(),
+      releaseTip: releaseTip.toString(),
       escrowTip: tip.relayerTip.toString(),
     }
   })
