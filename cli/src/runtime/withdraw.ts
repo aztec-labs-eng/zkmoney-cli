@@ -572,7 +572,7 @@ export const isTerminal = (record: WithdrawalRecord) => WITHDRAWAL_TERMINAL_PHAS
 export function phaseLabel(record: WithdrawalRecord, now = Date.now()): string {
   const copy = WITHDRAWAL_PHASE_COPY[record.phase]
   const status =
-    record.phase === "submitting" && !record.l2TxHash ? (copy.live ?? copy.status) : copy.status
+    record.phase === "submitting" && !record.l2TxHash ? (copy.proving ?? copy.status) : copy.status
   return isWithdrawalDelayed(record, now) ? `${status} (taking longer than usual)` : status
 }
 

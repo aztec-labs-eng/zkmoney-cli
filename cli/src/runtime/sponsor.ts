@@ -260,6 +260,7 @@ async function registrationGate(
       owner: EthAddress.fromString(identity.account),
       nameHash: Buffer.from(identity.nameHash.replace(/^0x/, ""), "hex"),
       rollupVersion: info.rollupVersion,
+      l1ChainId: rt.config.l1ChainId,
     },
   )
   if (!message) return { pending: "message" }

@@ -108,6 +108,7 @@ describe("terms", () => {
       deadline: "1759000500",
       signature: "0xcd" as const,
       reduced: true,
+      ticket: false,
     },
   }
 
