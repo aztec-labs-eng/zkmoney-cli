@@ -276,13 +276,17 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
   for (const [symbol, pin] of Object.entries(version.assets ?? {}))
     assets[symbol] = { value: pin, source: "profile" }
   const sUSDSPortal = pick("addresses.sUSDSPortal", undefined, settings)
-  if (sUSDSPortal) assets.sUSDS = { value: { portal: sUSDSPortal.value }, source: sUSDSPortal.source }
+  if (sUSDSPortal)
+    assets.sUSDS = { value: { portal: sUSDSPortal.value }, source: sUSDSPortal.source }
   const factoryEntry = version.contracts.skyEscrowFactory
   const skyEscrowFactory: Resolved<string | undefined> = pick(
     "addresses.skyEscrowFactory",
     undefined,
     settings,
-  ) ?? { value: factoryEntry && "address" in factoryEntry ? factoryEntry.address : undefined, source: "profile" }
+  ) ?? {
+    value: factoryEntry && "address" in factoryEntry ? factoryEntry.address : undefined,
+    source: "profile",
+  }
   return {
     home,
     network,

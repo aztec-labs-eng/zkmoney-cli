@@ -40,8 +40,8 @@ function moveRow(move: SavingsMove, burnPhase: string | undefined): string[] {
   const state = move.deposit?.claimed
     ? "done"
     : move.deposit
-      ? "deposited; claiming once it reaches L2"
-      : (burnPhase ?? "burn not recorded")
+    ? "deposited; claiming once it reaches L2"
+    : burnPhase ?? "burn not recorded"
   return [
     into ? "Main to Savings" : "Savings to Main",
     amount(BigInt(move.amount), DEFAULT_DECIMALS, into ? "DAI" : "sUSDS"),

@@ -114,7 +114,9 @@ describe("assets", () => {
         paylinkDomain: "https://paylink.example",
         oxide: { manifestUrl: "https://manifest.example/staging.v4.json", ...DAI },
         assets: { DAI, ...(sUSDS ? { sUSDS } : {}) },
-        contracts: { sponsorFPC: { address: "0x" + "1".repeat(64), classId: "0x" + "2".repeat(64) } },
+        contracts: {
+          sponsorFPC: { address: "0x" + "1".repeat(64), classId: "0x" + "2".repeat(64) },
+        },
       },
     },
   })

@@ -76,7 +76,8 @@ export async function savingsRuntime(rt: Runtime): Promise<Runtime> {
           getTokenAddress: async () => l2Token,
           getTuple: () => tuple,
         }).load()
-        if (!signer) note("note: the savings co-signer is not reachable; savings transfers will fail")
+        if (!signer)
+          note("note: the savings co-signer is not reachable; savings transfers will fail")
         else service.setTeeSigner(signer)
         return service
       })()
@@ -209,7 +210,11 @@ export async function moveThroughSky(
   const symbol = into ? "DAI" : "sUSDS"
   if (balance < input.amountAtomic)
     fail(
-      `the ${into ? "Main" : "Savings"} balance is ${formatAmount(balance, DEFAULT_DECIMALS, symbol)}`,
+      `the ${into ? "Main" : "Savings"} balance is ${formatAmount(
+        balance,
+        DEFAULT_DECIMALS,
+        symbol,
+      )}`,
     )
   const releaseTip = into ? WITHDRAW_RELAYER_TIP : SKY_RELEASE_TIP
   const cut = await fpcFundingCut(source)
@@ -387,6 +392,7 @@ export async function settleMoves(rt: Runtime, sv: Runtime): Promise<SavingsMove
     if (move.deposit && !move.deposit.claimed) {
       const token = await destination.tokenService()
       const salts = deriveSkyEscrowSalts(unlocked.masterSecret, move.nonce)
+      const escrow = move.escrow
       const claimed = await token
         .claimSweptDeposit({
           inboxIndex: BigInt(move.deposit.inboxIndex),
@@ -396,7 +402,11 @@ export async function settleMoves(rt: Runtime, sv: Runtime): Promise<SavingsMove
         })
         .then(
           () => true,
-          () => false,
+          (err: unknown) => {
+            if (process.env.ZKMONEY_DEBUG)
+              note(`claim for ${escrow}: ${err instanceof Error ? err.message : String(err)}`)
+            return false
+          },
         )
       move = { ...move, deposit: { ...move.deposit, claimed } }
     }
