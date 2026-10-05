@@ -27,6 +27,8 @@
     "@obsidion/front-core": "workspace:*",
     "@obsidion/sdk": "workspace:*",
     "@oxide/l1-contracts": "workspace:*",
+    "@oxide/oxide-client": "workspace:*",
+    "@oxide/oxide-lib": "workspace:*",
     "commander": "^12.1.0",
     "viem": "npm:@aztec/viem@2.38.2",
     "zod": "^4.4.3"

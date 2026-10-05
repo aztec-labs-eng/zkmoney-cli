@@ -5,6 +5,7 @@ import { balanceCommand, txsCommand, watchCommand } from "./commands/activity.ts
 import { configCommand } from "./commands/config.ts"
 import { depositsCommand } from "./commands/deposits.ts"
 import { registerCommand } from "./commands/register.ts"
+import { savingsCommand } from "./commands/savings.ts"
 import { contactsCommand } from "./commands/contacts.ts"
 import { paylinkCommand } from "./commands/paylink.ts"
 import { paymentsCommand } from "./commands/payments.ts"
@@ -40,6 +41,7 @@ const program = new Command("zkmoney")
   .addCommand(paymentsCommand())
   .addCommand(withdrawCommand())
   .addCommand(withdrawalsCommand())
+  .addCommand(savingsCommand())
   .addCommand(paylinkCommand())
   .addCommand(contactsCommand())
 

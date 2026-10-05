@@ -121,7 +121,7 @@ export function currentDeployment(rt: Runtime): WithdrawalDeployment {
   return { portal: withdrawalWiring(rt).portal, l2Token: rt.tuple.l2Token }
 }
 
-const tuplePortal = (tuple: OxideEnvTuple, field: keyof OxideEnvTuple): Address => {
+export const tuplePortal = (tuple: OxideEnvTuple, field: keyof OxideEnvTuple): Address => {
   const value = tuple[field]
   if (typeof value !== "string" || !value) fail(`oxide manifest lacks ${field}`)
   return value as Address
@@ -370,7 +370,7 @@ export interface BurnResult {
  * watcher. A burn that may still land is returned unmined for the tracker; one that never went out
  * fails its record and rethrows.
  */
-async function runBurn(
+export async function runBurn(
   rt: Runtime,
   input: {
     operationId: string
