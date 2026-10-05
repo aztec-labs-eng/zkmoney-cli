@@ -50,11 +50,15 @@ import {
   createOxideTeeSignerSource,
   deriveBootstrapKey,
   deriveSkyEscrowSalts,
+  isSavingsMovePending,
+  settleSavingsMove,
+  type SavingsMove,
   resolveOxideAccountFactory,
   signAccountDigest,
 } from "../frontCore.ts"
 import { amount as formatAmount, fail, note } from "../output.ts"
 import type { Runtime } from "./boot.ts"
+import { quoteFasterProof, type FasterProof } from "./fasterProof.ts"
 import { Records } from "./records.ts"
 import { oxideAccountPasskey, registrationKeysOf } from "./registration.ts"
 import { activateNetwork, parseSendAmount, sponsorOrFail } from "./send.ts"
@@ -153,26 +157,9 @@ export async function readSavings(sv: Runtime): Promise<SavingsPosition> {
   return { shares, value, apy: ssr === undefined ? undefined : apyFromSsr(ssr) }
 }
 
-export const SAVINGS_MOVE_KIND = "savings-move"
+export type { SavingsMove }
 
-export interface SavingsMove {
-  direction: "in" | "out"
-  /** The burn's withdrawal record. */
-  withdrawalLocalId: string
-  escrow: Address
-  nonce: Hex
-  recipientCommitment: Hex
-  /** What was burned, in the source token's base units: DAI moving in, sUSDS shares moving out. */
-  amount: string
-  /** The DAI the release pays the relayer, beyond the withdrawal subsidy. */
-  releaseTip: string
-  /** The DAI the escrow pays whoever runs it. */
-  escrowTip: string
-  /** The destination portal's deposit once the escrow has run, and whether this account claimed it. */
-  deposit?: { inboxIndex: string; amount: string; claimed: boolean }
-  /** Where `savings recover` sent what the escrow held, when it never ran. */
-  recovered?: { to: Address; txHashes: Hex[] }
-}
+export const SAVINGS_MOVE_KIND = "savings-move"
 
 interface SkyFactory {
   address: Address
@@ -207,7 +194,7 @@ async function skyFactory(rt: Runtime, sv: Runtime): Promise<SkyFactory> {
 }
 
 /** The L1 account whose signature recovers a move's escrow: this account's OxideAccount. */
-async function recoveryAccountOf(rt: Runtime): Promise<Address> {
+export async function recoveryAccountOf(rt: Runtime): Promise<Address> {
   const keys = await keysOf(rt)
   return (await createOxideL1Reader(rt.l1).predictAccountAddress(
     resolveOxideAccountFactory({ tuple: rt.tuple }),
@@ -225,10 +212,12 @@ export const newMoveId = () =>
 export async function moveThroughSky(
   rt: Runtime,
   sv: Runtime,
-  input: { direction: "in" | "out"; amountAtomic: bigint; key?: string },
+  input: { direction: "in" | "out"; amountAtomic: bigint; key?: string; faster?: boolean },
   onStage: (stage: WithdrawStage) => void,
-): Promise<{ id: string; move: SavingsMove; replayed: boolean }> {
+): Promise<{ id: string; move: SavingsMove; replayed: boolean; faster?: FasterProof }> {
   const into = input.direction === "in"
+  if (input.faster && !into)
+    fail("a move out of Savings cannot buy an early proof", "its prover would be paid in sUSDS")
   const source = into ? rt : sv
   onStage("building")
   await activateNetwork(rt)
@@ -251,8 +240,10 @@ export async function moveThroughSky(
     route,
   )
   const cut = await fpcFundingCut(source)
+  const faster = input.faster ? await quoteFasterProof(rt) : undefined
+  const proverTip = faster?.proverTip ?? 0n
   const released = into
-    ? input.amountAtomic - cut
+    ? input.amountAtomic - cut - proverTip
     : await rt.l1.readContract({
         address: factory.sUsds,
         abi: erc4626Abi,
@@ -263,7 +254,7 @@ export async function moveThroughSky(
   if (escrowFunding <= 0n)
     fail(
       `the amount does not cover the release fee of ${formatAmount(
-        releaseTip + cut,
+        releaseTip + cut + proverTip,
         DEFAULT_DECIMALS,
         "DAI",
       )}`,
@@ -311,7 +302,7 @@ export async function moveThroughSky(
       ),
       amount: input.amountAtomic,
       withdrawalRelayerTip: releaseTip,
-      proverTip: 0n,
+      proverTip,
       fpcFundingCut: cut,
       route,
       recipientCommitment,
@@ -332,6 +323,7 @@ export async function moveThroughSky(
         amount: formatUnits(input.amountAtomic, DEFAULT_DECIMALS),
         rawAmount: input.amountAtomic.toString(),
         relayerTip: releaseTip.toString(),
+        proverTip: proverTip.toString(),
         fpcFundingCut: cut.toString(),
         tokenSymbol: symbol,
         phase: "submitting",
@@ -348,6 +340,7 @@ export async function moveThroughSky(
             operationId,
             userAccount: account,
             useRawAmount: true,
+            proverTip,
             withdrawal: {
               tuple: source.tuple,
               portal,
@@ -368,9 +361,10 @@ export async function moveThroughSky(
       amount: input.amountAtomic.toString(),
       releaseTip: releaseTip.toString(),
       escrowTip: tip.relayerTip.toString(),
+      ...(proverTip ? { proverTip: proverTip.toString() } : {}),
     }
   })
-  return { id, move: handle.result, replayed: handle.replayed }
+  return { id, move: handle.result, replayed: handle.replayed, faster }
 }
 
 /** The shares that redeem for `value` USDS at Sky's current price. */
@@ -393,60 +387,42 @@ export async function sharesFor(sv: Runtime, value: bigint): Promise<bigint> {
  * balance. A claim that fails is tried again next time: the deposit's message may not have reached
  * L2 yet.
  */
+/** Claims Savings deposits that reached L2, so a sync credits a move as it credits a swept deposit. */
+export async function settlePendingSavings(rt: Runtime): Promise<void> {
+  if (!rt.config.assets.sUSDS) return
+  const records = await new Records(rt.storage).list<SavingsMove>(SAVINGS_MOVE_KIND)
+  if (!records.some(({ result }) => result && isSavingsMovePending(result))) return
+  await settleMoves(rt, await savingsRuntime(rt))
+}
+
 export async function settleMoves(
   rt: Runtime,
   sv: Runtime,
 ): Promise<{ id: string; move: SavingsMove }[]> {
   const records = new Records(rt.storage)
   const { unlocked, account } = await rt.account()
+  const destination = (side: Runtime) => ({
+    portal: side.tuple.portal as Address,
+    fromBlock: BigInt(side.tuple.deployedAtBlock ?? 0),
+    claimer: () => side.tokenService(),
+  })
+  const deps = {
+    publicClient: rt.l1 as never,
+    masterSecret: unlocked.masterSecret,
+    recipient: account.getAddress(),
+    main: destination(rt),
+    savings: destination(sv),
+  }
   const moves: { id: string; move: SavingsMove }[] = []
   for (const record of await records.list<SavingsMove>(SAVINGS_MOVE_KIND)) {
-    let move = record.result
-    if (!move) continue
-    if (move.recovered) {
-      moves.push({ id: record.key, move })
-      continue
-    }
-    const destination = move.direction === "in" ? sv : rt
-    if (!move.deposit) {
-      const [log] = await rt.l1.getContractEvents({
-        address: destination.tuple.portal as Address,
-        abi: OxidePortalAbi,
-        eventName: "Deposit",
-        args: { recipientCommitment: move.recipientCommitment },
-        fromBlock: BigInt(destination.tuple.deployedAtBlock ?? 0),
-      })
-      if (log)
-        move = {
-          ...move,
-          deposit: {
-            inboxIndex: log.args.index!.toString(),
-            amount: log.args.amount!.toString(),
-            claimed: false,
-          },
-        }
-    }
-    if (move.deposit && !move.deposit.claimed) {
-      const token = await destination.tokenService()
-      const salts = deriveSkyEscrowSalts(unlocked.masterSecret, move.nonce)
-      const escrow = move.escrow
-      const claimed = await token
-        .claimSweptDeposit({
-          inboxIndex: BigInt(move.deposit.inboxIndex),
-          amount: BigInt(move.deposit.amount),
-          recipient: account.getAddress(),
-          sharedSecretSalt: salts.recipient,
-        })
-        .then(
-          () => true,
-          (err: unknown) => {
-            if (process.env.ZKMONEY_DEBUG)
-              note(`claim for ${escrow}: ${err instanceof Error ? err.message : String(err)}`)
-            return false
-          },
-        )
-      move = { ...move, deposit: { ...move.deposit, claimed } }
-    }
+    if (!record.result) continue
+    const { move, claimError } = await settleSavingsMove(record.result, deps)
+    if (claimError && process.env.ZKMONEY_DEBUG)
+      note(
+        `claim for ${move.escrow}: ${
+          claimError instanceof Error ? claimError.message : String(claimError)
+        }`,
+      )
     if (move !== record.result) await records.put({ ...record, result: move })
     moves.push({ id: record.key, move })
   }

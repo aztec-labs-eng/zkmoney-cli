@@ -107,12 +107,23 @@ zkmoney payments list
 ## Withdrawing to Ethereum
 
 ```sh
-zkmoney withdraw 100 --to 0xabc… [--asset DAI|USDC|USDT|ETH] --idempotency-key wd-7 [--wait]
+zkmoney withdraw 100 --to 0xabc… [--asset DAI|USDC|USDT|ETH] [--faster] --idempotency-key wd-7 [--wait]
 zkmoney withdrawals get wd-7
 zkmoney withdrawals list
 ```
 
-A DAI withdrawal pays the address directly; USDC, USDT and ETH go through a swap on L1 and pay what the swap returns (mainnet only). The payout waits for the rollup to prove the burn's block, which takes minutes on mainnet and can take much longer on testnet. The recipient address is screened on mainnet; a refused address fails before anything is burned. `withdrawals get` shows the phase from burn to payout and the L1 hash once paid.
+A DAI withdrawal pays the address directly; USDC, USDT and ETH go through a swap on L1 and pay what the swap returns (mainnet only). The payout waits for the rollup to prove the burn's block, which takes minutes on mainnet and can take much longer on testnet. The recipient address is screened on mainnet; a refused address fails before anything is burned. `withdrawals get` shows the phase from burn to payout and the L1 hash once paid. `--faster` pays a DAI prover tip so the burn's proof comes before its epoch ends, and prints the wait with and without the tip; it takes DAI withdrawals only.
+
+## Savings
+
+```sh
+zkmoney savings                                   # value in USDS, shares, rate, moves in flight
+zkmoney savings add 10 [--faster] --key mv-1      # DAI from the main balance into Sky's sUSDS
+zkmoney savings to-main 3 --key mv-2              # USDS of savings back to the main balance, as DAI
+zkmoney savings recover mv-1 [--to 0x…]           # finish a move whose escrow nobody ran
+```
+
+A move burns into an escrow. A relayer releases the burn on L1 and runs the escrow, which deposits into the other side, and the next sync (`balance`, `watch` or `savings`) claims that deposit. Each move pays a release tip and an escrow tip, both in DAI. `--faster` adds a prover tip to a move into Savings; a move back cannot take one, because its prover would be paid in sUSDS. `recover` needs `ZKMONEY_L1_PRIVATE_KEY` for gas. Savings needs a profile that names the sUSDS deployment and the Sky escrow factory, or the `addresses.sUSDSPortal` and `addresses.skyEscrowFactory` settings.
 
 ## Paylinks
 

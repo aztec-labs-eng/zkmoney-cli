@@ -11,6 +11,7 @@ import {
   sharesFor,
   type SavingsMove,
 } from "../runtime/savings.ts"
+import { fasterEta } from "../runtime/fasterProof.ts"
 import { L1_PRIVATE_KEY_ENV } from "../runtime/registration.ts"
 import { parseSendAmount } from "../runtime/send.ts"
 import {
@@ -60,7 +61,7 @@ function moveRow(id: string, move: SavingsMove, burnPhase: string | undefined): 
 
 function moveCommand(direction: "in" | "out"): Command {
   const into = direction === "in"
-  return new Command(into ? "add" : "to-main")
+  const command = new Command(into ? "add" : "to-main")
     .description(
       into
         ? "move DAI from the main balance into Sky savings"
@@ -71,14 +72,14 @@ function moveCommand(direction: "in" | "out"): Command {
       into ? "DAI taken from the main balance, fees included" : "USDS of savings to move back",
     )
     .option("--key <key>", "idempotency key: a retry with the same key never moves twice")
-    .action(async (text: string, opts: { key?: string }, cmd: Command) => {
+    .action(async (text: string, opts: { key?: string; faster?: boolean }, cmd: Command) => {
       await withSavings(cmd, async (rt, sv) => {
         const value = parseSendAmount(text, DEFAULT_DECIMALS).atomic
         const amountAtomic = into ? value : await sharesFor(sv, value)
-        const { id, move, replayed } = await moveThroughSky(
+        const { id, move, replayed, faster } = await moveThroughSky(
           rt,
           sv,
-          { direction, amountAtomic, key: opts.key },
+          { direction, amountAtomic, key: opts.key, faster: opts.faster },
           (stage) => note(STAGE_LINE[stage]),
         )
         print(
@@ -88,12 +89,23 @@ function moveCommand(direction: "in" | "out"): Command {
             ["Escrow", move.escrow],
             ["Release tip", amount(BigInt(move.releaseTip), DEFAULT_DECIMALS, "DAI")],
             ["Escrow tip", amount(BigInt(move.escrowTip), DEFAULT_DECIMALS, "DAI")],
+            [
+              "Prover tip",
+              move.proverTip ? amount(BigInt(move.proverTip), DEFAULT_DECIMALS, "DAI") : undefined,
+            ],
+            ["Proof", faster ? fasterEta(faster) : undefined],
             ["Replayed", replayed ? "yes" : undefined],
           ]),
         )
         note("`zkmoney savings` shows its progress and claims it once it lands")
       })
     })
+  if (into)
+    command.option(
+      "--faster",
+      "pay a DAI prover tip so the move's proof comes before its epoch ends",
+    )
+  return command
 }
 
 export function savingsCommand(): Command {
