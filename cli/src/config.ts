@@ -200,7 +200,7 @@ export interface CliConfig {
   snapshot: ContractServiceConfig
   oxide: OxideEnvProfile
   claimFpcAddress: Resolved<string | undefined>
-  /** The profile's assets by token symbol, each a deployment in the oxide manifest found by its portal. */
+  /** The profile's assets by token symbol, each a deployment found by its portal in its manifest. */
   assets: Record<string, Resolved<AssetPin>>
   /** Runs moves between DAI and sUSDS; oxide's manifest does not carry it, so the profile's contracts do. */
   skyEscrowFactory: Resolved<string | undefined>
@@ -212,6 +212,8 @@ export interface CliConfig {
 
 export interface AssetPin {
   portal: string
+  /** Absent: the asset is in the oxide manifest. */
+  manifestUrl?: string
   expectedGitSha?: string
 }
 
@@ -277,7 +279,10 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
     assets[symbol] = { value: pin, source: "profile" }
   const sUSDSPortal = pick("addresses.sUSDSPortal", undefined, settings)
   if (sUSDSPortal)
-    assets.sUSDS = { value: { portal: sUSDSPortal.value }, source: sUSDSPortal.source }
+    assets.sUSDS = {
+      value: { portal: sUSDSPortal.value, manifestUrl: assets.sUSDS?.value.manifestUrl },
+      source: sUSDSPortal.source,
+    }
   const factoryEntry = version.contracts.skyEscrowFactory
   const skyEscrowFactory: Resolved<string | undefined> = pick(
     "addresses.skyEscrowFactory",

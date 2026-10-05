@@ -76,7 +76,7 @@ export async function savingsRuntime(rt: Runtime): Promise<Runtime> {
       "`zkmoney config set addresses.sUSDSPortal <portal>` names a Sky deployment to test against",
     )
   const tuple = await loadOxideManifestTuple({
-    manifestUrl: rt.config.oxide.manifestUrl,
+    manifestUrl: pin.manifestUrl ?? rt.config.oxide.manifestUrl,
     portal: pin.portal,
     network: rt.network,
     expectedGitSha: pin.expectedGitSha,

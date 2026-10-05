@@ -141,4 +141,16 @@ describe("assets", () => {
       source: "file",
     })
   })
+
+  it("keep an asset's own manifest, which a portal override does not move", async () => {
+    const dir = home()
+    const own = { portal: SKY_PORTAL, manifestUrl: "https://manifest.example/relayed-bridges.json" }
+    expect((await load(dir, doc(own))).assets.sUSDS).toEqual({ value: own, source: "profile" })
+
+    writeSettingsFile(settingsPath(dir, "testnet"), setSetting({}, "addresses.sUSDSPortal", "0xcc"))
+    expect((await load(dir, doc(own))).assets.sUSDS).toEqual({
+      value: { portal: "0xcc", manifestUrl: own.manifestUrl },
+      source: "file",
+    })
+  })
 })
