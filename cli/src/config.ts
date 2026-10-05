@@ -47,6 +47,7 @@ export const settingsSchema = z
         token: z.string().optional(),
         claimFpc: z.string().optional(),
         sUSDSPortal: z.string().optional(),
+        sUSDSManifest: z.string().url().optional(),
         skyEscrowFactory: z.string().optional(),
       })
       .optional(),
@@ -72,6 +73,7 @@ export const SETTING_KEYS = [
   "addresses.token",
   "addresses.claimFpc",
   "addresses.sUSDSPortal",
+  "addresses.sUSDSManifest",
   "addresses.skyEscrowFactory",
   "defaults.asset",
   "defaults.withdrawAsset",
@@ -90,6 +92,7 @@ const ENV_BY_KEY: Record<SettingKey, string> = {
   "addresses.token": "ZKMONEY_TOKEN",
   "addresses.claimFpc": "ZKMONEY_CLAIM_FPC",
   "addresses.sUSDSPortal": "ZKMONEY_SUSDS_PORTAL",
+  "addresses.sUSDSManifest": "ZKMONEY_SUSDS_MANIFEST",
   "addresses.skyEscrowFactory": "ZKMONEY_SKY_ESCROW_FACTORY",
   "defaults.asset": "ZKMONEY_ASSET",
   "defaults.withdrawAsset": "ZKMONEY_WITHDRAW_ASSET",
@@ -211,7 +214,10 @@ export interface CliConfig {
   claimFpcAddress: Resolved<string | undefined>
   /** The profile's assets by token symbol, each a deployment found by its portal in its manifest. */
   assets: Record<string, Resolved<AssetPin>>
-  /** Runs moves between DAI and sUSDS; oxide's manifest does not carry it, so the profile's contracts do. */
+  /**
+   * Runs moves between DAI and sUSDS. A setting overrides the manifest's; the profile's stands in
+   * for a manifest without one.
+   */
   skyEscrowFactory: Resolved<string | undefined>
   addressOverrides: { registry?: string; portal?: string; token?: string }
   defaults: { asset: string; withdrawAsset: string }
@@ -288,10 +294,19 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
   for (const [symbol, pin] of Object.entries(version.assets ?? {}))
     assets[symbol] = { value: pin, source: "profile" }
   const sUSDSPortal = pick("addresses.sUSDSPortal", undefined, settings)
+  const sUSDSManifest = pick("addresses.sUSDSManifest", undefined, settings)
   if (sUSDSPortal)
     assets.sUSDS = {
-      value: { portal: sUSDSPortal.value, manifestUrl: assets.sUSDS?.value.manifestUrl },
+      value: {
+        portal: sUSDSPortal.value,
+        manifestUrl: sUSDSManifest?.value ?? assets.sUSDS?.value.manifestUrl,
+      },
       source: sUSDSPortal.source,
+    }
+  else if (sUSDSManifest && assets.sUSDS)
+    assets.sUSDS = {
+      value: { ...assets.sUSDS.value, manifestUrl: sUSDSManifest.value },
+      source: sUSDSManifest.source,
     }
   const factoryEntry = version.contracts.skyEscrowFactory
   const skyEscrowFactory: Resolved<string | undefined> = pick(

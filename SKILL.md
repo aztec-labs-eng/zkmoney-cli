@@ -123,7 +123,7 @@ zkmoney savings to-main 3 --key mv-2              # USDS of savings back to the 
 zkmoney savings recover mv-1 [--to 0x…]           # finish a move whose escrow nobody ran
 ```
 
-A move burns into an escrow. A relayer releases the burn on L1 and runs the escrow, which deposits into the other side, and the next sync (`balance`, `watch` or `savings`) claims that deposit. Each move pays a release tip and an escrow tip, both in DAI. `--faster` adds a prover tip to a move into Savings; a move back cannot take one, because its prover would be paid in sUSDS. `recover` needs `ZKMONEY_L1_PRIVATE_KEY` for gas. Savings needs a profile that names the sUSDS deployment and the Sky escrow factory, or the `addresses.sUSDSPortal` and `addresses.skyEscrowFactory` settings.
+A move burns into an escrow. A relayer releases the burn on L1 and runs the escrow, which deposits into the other side, and the next sync (`balance`, `watch` or `savings`) claims that deposit. Each move pays a release tip and an escrow tip, both in DAI. `--faster` adds a prover tip to a move into Savings; a move back cannot take one, because its prover would be paid in sUSDS. `recover` needs `ZKMONEY_L1_PRIVATE_KEY` for gas. Savings needs a profile that names the sUSDS deployment, or the `addresses.sUSDSPortal` setting, with `addresses.sUSDSManifest` when Savings is published in another manifest. The Sky escrow factory comes from the manifest, and `addresses.skyEscrowFactory` overrides it.
 
 ## Paylinks
 

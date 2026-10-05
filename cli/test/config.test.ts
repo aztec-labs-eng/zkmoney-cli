@@ -148,6 +148,20 @@ describe("assets", () => {
     })
   })
 
+  it("take Savings' manifest from a setting, as when it is published apart", async () => {
+    const dir = home()
+    const dev = "https://manifest.example/dev.json"
+    writeSettingsFile(
+      settingsPath(dir, "testnet"),
+      setSetting(
+        setSetting({}, "addresses.sUSDSPortal", "0xcc"),
+        "addresses.sUSDSManifest",
+        dev,
+      ),
+    )
+    expect((await load(dir, doc())).assets.sUSDS?.value).toEqual({ portal: "0xcc", manifestUrl: dev })
+  })
+
   it("keep an asset's own manifest, which a portal override does not move", async () => {
     const dir = home()
     const own = { portal: SKY_PORTAL, manifestUrl: "https://manifest.example/relayed-bridges.json" }

@@ -170,12 +170,16 @@ interface SkyFactory {
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
-/** The profile's Sky escrow factory, checked to move between this wallet's DAI and sUSDS deployments. */
+/** The Sky escrow factory, checked to move between this wallet's DAI and sUSDS deployments. */
 async function skyFactory(rt: Runtime, sv: Runtime): Promise<SkyFactory> {
-  const address = rt.config.skyEscrowFactory.value as Address | undefined
+  const configured = rt.config.skyEscrowFactory
+  const address = ((configured.source !== "profile" && configured.value) ||
+    rt.tuple.skyEscrowFactory ||
+    sv.tuple.skyEscrowFactory ||
+    configured.value) as Address | undefined
   if (!address)
     fail(
-      `the ${rt.network} profile names no Sky escrow factory`,
+      `neither the ${rt.network} manifest nor its profile names a Sky escrow factory`,
       "`zkmoney config set addresses.skyEscrowFactory <address>` names one to test against",
     )
   const read = (functionName: "DAI" | "DAI_PORTAL" | "SUSDS" | "SUSDS_PORTAL") =>
