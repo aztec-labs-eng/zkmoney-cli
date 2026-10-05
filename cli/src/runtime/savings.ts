@@ -8,6 +8,7 @@
  * broadcasts the release and the escrow's run; the run deposits into the destination portal under a
  * commitment this account derived, and the account then claims that deposit.
  */
+import { randomBytes } from "node:crypto"
 import { EthAddress } from "@aztec/aztec.js/addresses"
 import { Fr } from "@aztec/aztec.js/fields"
 import { AztecAddress } from "@aztec/stdlib/aztec-address"
@@ -16,25 +17,45 @@ import { DEFAULT_DECIMALS, WITHDRAW_RELAYER_TIP } from "@obsidion/core/constants
 import {
   BroadcasterContract,
   TokenService,
+  buildSkyEscrowRecoverCall,
+  buildSkyEscrowRunCall,
   nextOperationId,
   quoteSkyEscrowTip,
   readPortalWithdrawalState,
 } from "@obsidion/sdk"
-import { SkyEscrowFactoryAbi, SkyRoute } from "@oxide/l1-contracts"
+import {
+  SkyEscrowFactoryAbi,
+  SkyRoute,
+  escrowERC20RecoveryDigest,
+  predictSkyEscrowAddressLocally,
+  type SkyEscrowArgs,
+} from "@oxide/l1-contracts"
 import { OxidePortalAbi } from "@oxide/l1-contracts/abis/OxidePortal.js"
 import { buildSkyEscrowWithdrawal } from "@oxide/oxide-client/withdraw_escrows/sky.js"
 import { computeRecipientCommitment } from "@oxide/oxide-lib/recipient_commitment.js"
-import { erc4626Abi, formatUnits, type Address, type Hex } from "viem"
+import { deriveRecoveryCommitment } from "@oxide/oxide-lib/sipa_recovery.js"
+import {
+  createWalletClient,
+  erc20Abi,
+  erc4626Abi,
+  formatUnits,
+  http,
+  type Address,
+  type Hex,
+} from "viem"
+import { privateKeyToAccount } from "viem/accounts"
 import {
   createOxideL1Reader,
   createOxideTeeSignerSource,
   deriveBootstrapKey,
   deriveSkyEscrowSalts,
   resolveOxideAccountFactory,
+  signAccountDigest,
 } from "../frontCore.ts"
 import { amount as formatAmount, fail, note } from "../output.ts"
 import type { Runtime } from "./boot.ts"
 import { Records } from "./records.ts"
+import { oxideAccountPasskey, registrationKeysOf } from "./registration.ts"
 import { activateNetwork, parseSendAmount, sponsorOrFail } from "./send.ts"
 import { keysOf, noteSubscribed } from "./sponsor.ts"
 import {
@@ -153,6 +174,8 @@ export interface SavingsMove {
   escrowTip: string
   /** The destination portal's deposit once the escrow has run, and whether this account claimed it. */
   deposit?: { inboxIndex: string; amount: string; claimed: boolean }
+  /** Where `savings recover` sent what the escrow held, when it never ran. */
+  recovered?: { to: Address; txHashes: Hex[] }
 }
 
 interface SkyFactory {
@@ -185,6 +208,15 @@ async function skyFactory(rt: Runtime, sv: Runtime): Promise<SkyFactory> {
         `not this wallet's ${rt.tuple.portal} and ${sv.tuple.portal}`,
     )
   return { address, dai, sUsds }
+}
+
+/** The L1 account whose signature recovers a move's escrow: this account's OxideAccount. */
+async function recoveryAccountOf(rt: Runtime): Promise<Address> {
+  const keys = await keysOf(rt)
+  return (await createOxideL1Reader(rt.l1).predictAccountAddress(
+    resolveOxideAccountFactory({ tuple: rt.tuple }),
+    deriveBootstrapKey(keys.secretKey).address,
+  )) as Address
 }
 
 export const newMoveId = () =>
@@ -262,11 +294,7 @@ export async function moveThroughSky(
     const recipientCommitment = (
       await computeRecipientCommitment(salts.recipient, account.getAddress())
     ).toString() as Hex
-    const keys = await keysOf(rt)
-    const recoveryAccount = await createOxideL1Reader(rt.l1).predictAccountAddress(
-      resolveOxideAccountFactory({ tuple: rt.tuple }),
-      deriveBootstrapKey(keys.secretKey).address,
-    )
+    const recoveryAccount = await recoveryAccountOf(rt)
     const broadcasterAddress = tuplePortal(source.tuple, "l2Broadcaster")
     const built = buildSkyEscrowWithdrawal({
       broadcaster: BroadcasterContract.at(
@@ -363,13 +391,20 @@ export async function sharesFor(sv: Runtime, value: bigint): Promise<bigint> {
  * balance. A claim that fails is tried again next time: the deposit's message may not have reached
  * L2 yet.
  */
-export async function settleMoves(rt: Runtime, sv: Runtime): Promise<SavingsMove[]> {
+export async function settleMoves(
+  rt: Runtime,
+  sv: Runtime,
+): Promise<{ id: string; move: SavingsMove }[]> {
   const records = new Records(rt.storage)
   const { unlocked, account } = await rt.account()
-  const moves: SavingsMove[] = []
+  const moves: { id: string; move: SavingsMove }[] = []
   for (const record of await records.list<SavingsMove>(SAVINGS_MOVE_KIND)) {
     let move = record.result
     if (!move) continue
+    if (move.recovered) {
+      moves.push({ id: record.key, move })
+      continue
+    }
     const destination = move.direction === "in" ? sv : rt
     if (!move.deposit) {
       const [log] = await rt.l1.getContractEvents({
@@ -411,7 +446,119 @@ export async function settleMoves(rt: Runtime, sv: Runtime): Promise<SavingsMove
       move = { ...move, deposit: { ...move.deposit, claimed } }
     }
     if (move !== record.result) await records.put({ ...record, result: move })
-    moves.push(move)
+    moves.push({ id: record.key, move })
   }
   return moves
+}
+
+/** How long a recovery signature stays valid, in chain seconds: it is sent at once. */
+const RECOVERY_DEADLINE_S = 60n * 60n
+
+/**
+ * The two exits from a move whose escrow nobody ran, both sent from `privateKey`, which pays the gas.
+ * Without `to`, run the escrow, which completes the move and pays the sender its tip. With `to`,
+ * send what the escrow holds there instead, signed by this account's OxideAccount.
+ */
+export async function exitMove(
+  rt: Runtime,
+  sv: Runtime,
+  input: { id: string; to?: Address },
+  privateKey: Hex,
+): Promise<{ txHashes: Hex[] }> {
+  const records = new Records(rt.storage)
+  const record = await records.get<SavingsMove>(SAVINGS_MOVE_KIND, input.id)
+  const move = record?.result
+  if (!record || !move)
+    fail(`no savings move "${input.id}"`, "`zkmoney savings` lists the ones in flight")
+  if (move.deposit) fail("this move's escrow already ran; `zkmoney savings` claims its deposit")
+  if (move.recovered) fail(`this move's escrow was already recovered to ${move.recovered.to}`)
+  const factory = await skyFactory(rt, sv)
+  const { unlocked } = await rt.account()
+  const salts = deriveSkyEscrowSalts(unlocked.masterSecret, move.nonce)
+  const recovery = { account: await recoveryAccountOf(rt), salt: salts.recovery }
+  const args: SkyEscrowArgs = {
+    route: move.direction === "in" ? SkyRoute.Stake : SkyRoute.Unstake,
+    recipientCommitment: move.recipientCommitment,
+    recoveryCommitment: deriveRecoveryCommitment(
+      salts.recovery,
+      EthAddress.fromString(recovery.account),
+    ).toString() as Hex,
+    relayerTip: BigInt(move.escrowTip),
+    nonce: move.nonce,
+  }
+  if (!sameAddress(predictSkyEscrowAddressLocally(factory.address, args), move.escrow))
+    fail(`this account's keys do not rebuild escrow ${move.escrow}`)
+  const held = (token: Address) =>
+    rt.l1.readContract({
+      address: token,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [move.escrow],
+    })
+  const [dai, shares] = await Promise.all([held(factory.dai), held(factory.sUsds)])
+  if (dai === 0n && shares === 0n)
+    fail(
+      "the escrow holds nothing: the burn has not been released to it yet",
+      "`zkmoney withdrawals list` shows the burn's progress",
+    )
+  const wallet = createWalletClient({
+    account: privateKeyToAccount(privateKey),
+    chain: rt.l1Chain,
+    transport: http(rt.config.l1RpcUrl.value, { timeout: 20_000 }),
+  })
+  const send = async (call: { to: Address; data: Hex }) => {
+    const hash = await wallet.sendTransaction({ to: call.to, data: call.data })
+    const receipt = await rt.l1.waitForTransactionReceipt({ hash })
+    if (receipt.status !== "success") fail(`transaction ${hash} reverted`)
+    return hash
+  }
+  if (!input.to) {
+    if (dai <= args.relayerTip)
+      fail(
+        "the escrow holds no more DAI than its tip, so running it would move nothing",
+        "send what it holds to an Ethereum address with --to",
+      )
+    return { txHashes: [await send(buildSkyEscrowRunCall(factory.address, args))] }
+  }
+  const keys = await registrationKeysOf(rt)
+  const signing = {
+    account: recovery.account,
+    chainId: rt.config.l1ChainId,
+    reader: createOxideL1Reader(rt.l1),
+    passkey: await oxideAccountPasskey(keys.provider),
+    bootstrap: deriveBootstrapKey(keys.secretKey),
+  }
+  const txHashes: Hex[] = []
+  for (const [token, amount] of [
+    [factory.dai, dai],
+    [factory.sUsds, shares],
+  ] as const) {
+    if (amount === 0n) continue
+    const nonce = `0x${randomBytes(32).toString("hex")}` as Hex
+    const deadline = (await rt.l1.getBlock({ blockTag: "latest" })).timestamp + RECOVERY_DEADLINE_S
+    const hash = escrowERC20RecoveryDigest(
+      move.escrow,
+      BigInt(rt.config.l1ChainId),
+      input.to,
+      token,
+      nonce,
+      deadline,
+    )
+    const code = await rt.l1.getCode({ address: move.escrow })
+    const call = buildSkyEscrowRecoverCall({
+      deployed: !!code && code !== "0x",
+      factory: factory.address,
+      escrow: move.escrow,
+      args,
+      recovery,
+      signature: await signAccountDigest({ ...signing, hash }),
+      target: input.to,
+      token,
+      nonce,
+      deadline,
+    })
+    txHashes.push(await send(call))
+  }
+  await records.put({ ...record, result: { ...move, recovered: { to: input.to, txHashes } } })
+  return { txHashes }
 }
