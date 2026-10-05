@@ -302,11 +302,12 @@ export async function moveThroughSky(
       await computeRecipientCommitment(salts.recipient, account.getAddress())
     ).toString() as Hex
     const recoveryAccount = await recoveryAccountOf(rt)
-    const broadcasterAddress = tuplePortal(source.tuple, "l2Broadcaster")
+    // Main's relayer runs every Sky escrow, either way: it watches the DAI each escrow waits for.
+    const runner = tuplePortal(rt.tuple, "l2Broadcaster")
     const built = buildSkyEscrowWithdrawal({
       broadcaster: BroadcasterContract.at(
-        AztecAddress.fromStringUnsafe(broadcasterAddress),
-        await rt.broadcasterArtifact(broadcasterAddress),
+        AztecAddress.fromStringUnsafe(runner),
+        await rt.broadcasterArtifact(runner),
         rt.wallet as never,
       ),
       skyEscrowFactory: EthAddress.fromString(factory.address),
@@ -359,7 +360,12 @@ export async function moveThroughSky(
             withdrawal: {
               tuple: source.tuple,
               portal,
-              escrow: { escrow: built.escrow, userPayload, l1Operation: built.l1Operation },
+              escrow: {
+                escrow: built.escrow,
+                userPayload,
+                l1Operation: built.l1Operation,
+                broadcaster: runner,
+              },
             },
           },
         )
