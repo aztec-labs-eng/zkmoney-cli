@@ -89,7 +89,8 @@ it(
       sv,
       {
         direction: "out",
-        amountAtomic: await sharesFor(sv, parseUnits("2", 18)),
+        // Its two tips take about 2 DAI at testnet gas.
+        amountAtomic: await sharesFor(sv, parseUnits("6", 18)),
         key: `e2e-out-${Date.now()}`,
       },
       quiet,

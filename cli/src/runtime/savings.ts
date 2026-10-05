@@ -20,6 +20,7 @@ import {
   buildSkyEscrowRecoverCall,
   buildSkyEscrowRunCall,
   nextOperationId,
+  SkyTipExceedsFundingError,
   quoteSkyEscrowTip,
   quoteSkyReleaseTip,
   readPortalWithdrawalState,
@@ -272,7 +273,17 @@ export async function moveThroughSky(
       escrowFunding,
       sender: factory.address,
     },
-  )
+  ).catch((err: unknown) => {
+    if (err instanceof SkyTipExceedsFundingError)
+      fail(
+        `the amount does not cover the move's fees of ${formatAmount(
+          releaseTip + cut + proverTip + err.tip.relayerTip,
+          DEFAULT_DECIMALS,
+          "DAI",
+        )}`,
+      )
+    throw err
+  })
   const { unlocked, account } = await rt.account()
   const records = new Records(rt.storage)
   const id = input.key ?? newMoveId()
