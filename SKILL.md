@@ -17,6 +17,7 @@ The Aztec node each profile names sits behind a gateway key: save it once per ne
 | --- | --- | --- |
 | `mainnet` (default) | Ethereum and Aztec mainnet | `https://cdn.zk.money/profiles/v5/current.json` |
 | `staging` (also `testnet`) | Sepolia and Aztec testnet | `https://cdn.staging.zk.money/profiles/v5/current.json` |
+| `dev` | Sepolia and Aztec testnet, on the dev deployments | `https://cdn.dev.zk.money/profiles/v5/current.json` |
 
 The config profile carries the node, the L1 RPC, the account service and the contracts. It does not carry the key for Aztec Labs' node gateway, which answers 403 without one, so save each network's key once. On mainnet, also set your own Ethereum RPC: the profile's public one answers only recent blocks, and `balance`, deposits and registration scan older logs. Every setting but `profile` is kept per network:
 
@@ -29,7 +30,7 @@ zkmoney config set profile staging     # use staging from now on; `zkmoney confi
 
 The CLI builds against the wallet release mainnet runs. On staging that release's resolver scan finds no operator, so the CLI does not claim swept deposits or derive a new registration's address there; `balance` says so in a note and still prints the balance.
 
-`--profile` picks a network for one command and `ZKMONEY_PROFILE` for a shell. Each network keeps its own account under `~/.zkmoney/<network>/`, so its first use starts with `account init`. `node.url` can point at any other Aztec node on the same network instead, with no key.
+`--profile` picks a network for one command and `ZKMONEY_PROFILE` for a shell. Each network keeps its own account under `~/.zkmoney/<network>/`, and dev under `~/.zkmoney/dev/` although it shares staging's network, so its first use starts with `account init`. `node.url` can point at any other Aztec node on the same network instead, with no key.
 
 The staging key is the Preview environment's variable: `gh variable get WEB_WALLET_PREVIEW_NODE_API_KEY --env Preview -R aztec-labs-eng/obsidion-wallet`. The mainnet key is the production wallet's `WEB_WALLET_NODE_API_KEY` secret.
 

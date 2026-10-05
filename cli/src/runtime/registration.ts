@@ -488,7 +488,7 @@ async function registrationBroadcastSeen(
 function localTagResolver(rt: Runtime, ctx: RegistrationContext) {
   return async (nameHash: Hex): Promise<string | null> => {
     const known = [
-      readAccountFile(rt.config.home, rt.config.network)?.identity?.tag,
+      readAccountFile(rt.config.home, rt.config.dir)?.identity?.tag,
       ...ctx.pending.list().map((r) => r.tag),
     ]
     for (const tag of known) {

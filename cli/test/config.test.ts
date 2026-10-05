@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   describeSettings,
+  dirOf,
   getSetting,
   loadConfig,
   networkOf,
@@ -71,6 +72,11 @@ describe("settings", () => {
     expect(networkOf("testnet")).toBe("testnet")
     expect(networkOf("mainnet")).toBe("mainnet")
     expect(networkOf("custom")).toBe("custom")
+  })
+
+  it("runs dev on the testnet network, in a directory of its own", () => {
+    expect(networkOf("dev")).toBe("testnet")
+    expect([dirOf("dev"), dirOf("staging"), dirOf("custom")]).toEqual(["dev", "testnet", "custom"])
   })
 
   it("rejects a value the schema refuses", () => {

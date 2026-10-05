@@ -1,6 +1,6 @@
 import { Command } from "commander"
 import { WEB_PASSKEY_RP_IDS } from "@obsidion/core/constants"
-import { defaultHome, loadConfig, networkOf, profileOf } from "../config.ts"
+import { defaultHome, dirOf, loadConfig, networkOf, profileOf } from "../config.ts"
 import {
   accountPath,
   createAccountFile,
@@ -12,11 +12,12 @@ import { fail, fields, print, shorten } from "../output.ts"
 import { boot } from "../runtime/boot.ts"
 import { readIdentity } from "../runtime/identity.ts"
 
-/** The relying party the web wallet uses on this network, so a security-key account is shared with it. */
-export function rpIdFor(network: string): string {
+/** The web wallet's relying party for this profile, so a security-key account is shared with it. */
+export function rpIdFor(dir: string): string {
   // Production builds pass VITE_PASSKEY_RP_ID=wallet.zk.money; the constants table lags behind.
-  if (network === "mainnet") return "wallet.zk.money"
-  if (network === "testnet") return WEB_PASSKEY_RP_IDS.staging
+  if (dir === "mainnet") return "wallet.zk.money"
+  if (dir === "testnet") return WEB_PASSKEY_RP_IDS.staging
+  if (dir === "dev") return WEB_PASSKEY_RP_IDS.dev
   return WEB_PASSKEY_RP_IDS.local
 }
 
@@ -37,18 +38,18 @@ export function accountCommand(): Command {
     .action(async (opts: { key: string; name: string }, cmd: Command) => {
       const globals = cmd.optsWithGlobals<{ home?: string; profile?: string }>()
       const home = globals.home ?? defaultHome()
-      const network = networkOf(profileOf(home, globals.profile))
-      if (readAccountFile(home, network)) {
+      const dir = dirOf(profileOf(home, globals.profile))
+      if (readAccountFile(home, dir)) {
         fail(
-          `an account already exists at ${accountPath(home, network)}`,
+          `an account already exists at ${accountPath(home, dir)}`,
           "move it aside to start a new one",
         )
       }
       const kind = opts.key === "security-key" ? "fido2" : opts.key === "file" ? "software" : "auto"
       const { file, chosen, reason } = await createAccountFile({
         home,
-        network,
-        rpId: rpIdFor(network),
+        network: dir,
+        rpId: rpIdFor(dir),
         kind,
         userName: opts.name,
       })
@@ -57,7 +58,7 @@ export function accountCommand(): Command {
           ["Passkey", chosen === "fido2" ? "security key" : "key file"],
           ["Why", reason],
           ["Relying party", file.rpId],
-          ["Saved to", accountPath(home, network)],
+          ["Saved to", accountPath(home, dir)],
         ]),
       )
       print(
@@ -72,9 +73,11 @@ export function accountCommand(): Command {
     .action(async (opts: { full?: boolean }, cmd: Command) => {
       const globals = cmd.optsWithGlobals<{ home?: string; profile?: string }>()
       const home = globals.home ?? defaultHome()
-      const network = networkOf(profileOf(home, globals.profile))
-      const file = readAccountFile(home, network)
-      if (!file) fail(`no account for ${network} yet`, "run `zkmoney account init`")
+      const profile = profileOf(home, globals.profile)
+      const network = networkOf(profile)
+      const dir = dirOf(profile)
+      const file = readAccountFile(home, dir)
+      if (!file) fail(`no account for ${dir} yet`, "run `zkmoney account init`")
       const devices = file.kind === "fido2" ? await listFido2Devices() : []
       print(
         fields([
@@ -105,7 +108,7 @@ export function accountCommand(): Command {
             file.identity?.l1Account ? shorten(file.identity.l1Account, opts.full) : undefined,
           ],
           ["Created", new Date(file.createdAt).toLocaleString()],
-          ["File", accountPath(home, network)],
+          ["File", accountPath(home, dir)],
         ]),
       )
     })
@@ -117,7 +120,7 @@ export function accountCommand(): Command {
       const rt = await boot(cmd.optsWithGlobals())
       try {
         const identity = await readIdentity(rt)
-        rememberIdentity(rt.config.home, rt.config.network, identity)
+        rememberIdentity(rt.config.home, rt.config.dir, identity)
         print(
           fields([
             ["L2 address", identity.l2Address],

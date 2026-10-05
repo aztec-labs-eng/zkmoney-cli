@@ -68,7 +68,7 @@ export function l1ChainFor(chainId: number): Chain {
   return { ...foundry, id: chainId, name: `Chain ${chainId}` }
 }
 
-export const storagePath = (config: CliConfig) => join(config.home, config.network, "store.json")
+export const storagePath = (config: CliConfig) => join(config.home, config.dir, "store.json")
 
 /** The registration controller is the one contract the manifest does not carry; the registry names it. */
 async function withRegistrationController(
@@ -128,7 +128,7 @@ export async function boot(opts: BootOptions = {}): Promise<Runtime> {
       ...getPXEConfig(),
       proverEnabled: true,
       autoSync: false,
-      dataDirectory: join(config.home, config.network, "pxe"),
+      dataDirectory: join(config.home, config.dir, "pxe"),
     },
     { loggers: {} },
   )
@@ -199,7 +199,7 @@ export async function boot(opts: BootOptions = {}): Promise<Runtime> {
     },
     account() {
       accountPromise ??= (async () => {
-        const unlocked = await unlockAccount(config.home, config.network)
+        const unlocked = await unlockAccount(config.home, config.dir)
         const provider = providerFor(unlocked.authenticator)
         const account = await wallet.getObsidionAccountWallet(unlocked.masterSecret, provider, {
           register: true,
@@ -212,7 +212,7 @@ export async function boot(opts: BootOptions = {}): Promise<Runtime> {
           )
         }
         if (!unlocked.file.identity?.l2Address)
-          rememberIdentity(config.home, config.network, { l2Address })
+          rememberIdentity(config.home, config.dir, { l2Address })
         return { unlocked, account }
       })()
       return accountPromise
