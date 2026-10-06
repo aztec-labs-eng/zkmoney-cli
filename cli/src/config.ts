@@ -47,7 +47,6 @@ export const settingsSchema = z
         token: z.string().optional(),
         claimFpc: z.string().optional(),
         sUSDSPortal: z.string().optional(),
-        sUSDSManifest: z.string().url().optional(),
         skyEscrowFactory: z.string().optional(),
       })
       .optional(),
@@ -73,7 +72,6 @@ export const SETTING_KEYS = [
   "addresses.token",
   "addresses.claimFpc",
   "addresses.sUSDSPortal",
-  "addresses.sUSDSManifest",
   "addresses.skyEscrowFactory",
   "defaults.asset",
   "defaults.withdrawAsset",
@@ -92,7 +90,6 @@ const ENV_BY_KEY: Record<SettingKey, string> = {
   "addresses.token": "ZKMONEY_TOKEN",
   "addresses.claimFpc": "ZKMONEY_CLAIM_FPC",
   "addresses.sUSDSPortal": "ZKMONEY_SUSDS_PORTAL",
-  "addresses.sUSDSManifest": "ZKMONEY_SUSDS_MANIFEST",
   "addresses.skyEscrowFactory": "ZKMONEY_SKY_ESCROW_FACTORY",
   "defaults.asset": "ZKMONEY_ASSET",
   "defaults.withdrawAsset": "ZKMONEY_WITHDRAW_ASSET",
@@ -225,10 +222,9 @@ export interface CliConfig {
   profile: ConfigProfile
 }
 
+/** An asset's deployment in the oxide manifest. */
 export interface AssetPin {
   portal: string
-  /** Absent: the asset is in the oxide manifest. */
-  manifestUrl?: string
   expectedGitSha?: string
 }
 
@@ -291,23 +287,11 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
     source: "profile",
   }
   const assets: Record<string, Resolved<AssetPin>> = {}
-  for (const [symbol, pin] of Object.entries(version.assets ?? {}))
+  for (const { symbol, ...pin } of version.assets ?? [])
     assets[symbol] = { value: pin, source: "profile" }
   const sUSDSPortal = pick("addresses.sUSDSPortal", undefined, settings)
-  const sUSDSManifest = pick("addresses.sUSDSManifest", undefined, settings)
   if (sUSDSPortal)
-    assets.sUSDS = {
-      value: {
-        portal: sUSDSPortal.value,
-        manifestUrl: sUSDSManifest?.value ?? assets.sUSDS?.value.manifestUrl,
-      },
-      source: sUSDSPortal.source,
-    }
-  else if (sUSDSManifest && assets.sUSDS)
-    assets.sUSDS = {
-      value: { ...assets.sUSDS.value, manifestUrl: sUSDSManifest.value },
-      source: sUSDSManifest.source,
-    }
+    assets.sUSDS = { value: { portal: sUSDSPortal.value }, source: sUSDSPortal.source }
   const factoryEntry = version.contracts.skyEscrowFactory
   const skyEscrowFactory: Resolved<string | undefined> = pick(
     "addresses.skyEscrowFactory",

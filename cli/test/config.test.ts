@@ -103,7 +103,7 @@ describe("settings", () => {
 describe("assets", () => {
   const SKY_PORTAL = "0x00000000000000000000000000000000000000aa"
   const DAI = { portal: "0x00000000000000000000000000000000000000bb" }
-  const doc = (sUSDS?: object) => ({
+  const doc = (sUSDS?: { portal: string }) => ({
     profileId: "staging-v5",
     network: "testnet",
     publishedAt: "2026-10-05T00:00:00Z",
@@ -119,7 +119,7 @@ describe("assets", () => {
         zkmoneyApiUrl: "https://api.example",
         paylinkDomain: "https://paylink.example",
         oxide: { manifestUrl: "https://manifest.example/staging.v4.json", ...DAI },
-        assets: { DAI, ...(sUSDS ? { sUSDS } : {}) },
+        assets: [{ symbol: "DAI", ...DAI }, ...(sUSDS ? [{ symbol: "sUSDS", ...sUSDS }] : [])],
         contracts: {
           sponsorFPC: { address: "0x" + "1".repeat(64), classId: "0x" + "2".repeat(64) },
         },
@@ -148,29 +148,4 @@ describe("assets", () => {
     })
   })
 
-  it("take Savings' manifest from a setting, as when it is published apart", async () => {
-    const dir = home()
-    const dev = "https://manifest.example/dev.json"
-    writeSettingsFile(
-      settingsPath(dir, "testnet"),
-      setSetting(
-        setSetting({}, "addresses.sUSDSPortal", "0xcc"),
-        "addresses.sUSDSManifest",
-        dev,
-      ),
-    )
-    expect((await load(dir, doc())).assets.sUSDS?.value).toEqual({ portal: "0xcc", manifestUrl: dev })
-  })
-
-  it("keep an asset's own manifest, which a portal override does not move", async () => {
-    const dir = home()
-    const own = { portal: SKY_PORTAL, manifestUrl: "https://manifest.example/relayed-bridges.json" }
-    expect((await load(dir, doc(own))).assets.sUSDS).toEqual({ value: own, source: "profile" })
-
-    writeSettingsFile(settingsPath(dir, "testnet"), setSetting({}, "addresses.sUSDSPortal", "0xcc"))
-    expect((await load(dir, doc(own))).assets.sUSDS).toEqual({
-      value: { portal: "0xcc", manifestUrl: own.manifestUrl },
-      source: "file",
-    })
-  })
 })
