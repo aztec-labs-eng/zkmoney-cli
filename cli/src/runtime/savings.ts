@@ -329,6 +329,8 @@ export async function moveThroughSky(
     })
     if (built.operation.kind !== "withdraw") fail("the Sky escrow built no withdrawal")
     const userPayload = built.operation.userPayload
+    // The escrow's deposit lands after the burn, so its search starts here.
+    const depositScanFrom = (await rt.l1.getBlockNumber()).toString()
     const portal = await readPortalWithdrawalState(rt.l1 as never, source.tuple.portal as Address)
     const operationId = nextOperationId("withdraw")
     const { record, mined } = await runBurn(source, {
@@ -365,6 +367,7 @@ export async function moveThroughSky(
                 userPayload,
                 l1Operation: built.l1Operation,
                 broadcaster: runner,
+                sky: { ...built.escrowArgs, factory: factory.address },
               },
             },
           },
@@ -383,6 +386,7 @@ export async function moveThroughSky(
       releaseTip: releaseTip.toString(),
       escrowTip: tip.relayerTip.toString(),
       ...(proverTip ? { proverTip: proverTip.toString() } : {}),
+      depositScanFrom,
     }
   })
   return { id, move: handle.result, replayed: handle.replayed, faster }
