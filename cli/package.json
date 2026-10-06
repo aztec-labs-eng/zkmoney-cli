@@ -27,6 +27,7 @@
     "@obsidion/core": "workspace:*",
     "@obsidion/front-core": "workspace:*",
     "@obsidion/sdk": "workspace:*",
+    "@oxide/experiments": "workspace:*",
     "@oxide/l1-contracts": "workspace:*",
     "@oxide/oxide-client": "workspace:*",
     "@oxide/oxide-lib": "workspace:*",

@@ -28,12 +28,12 @@ import {
 import {
   SkyEscrowFactoryAbi,
   SkyRoute,
-  escrowERC20RecoveryDigest,
   predictSkyEscrowAddressLocally,
   type SkyEscrowArgs,
-} from "@oxide/l1-contracts"
+} from "@oxide/experiments/sky/sky_savings.js"
+import { buildSkyEscrowWithdrawal } from "@oxide/experiments/sky/withdraw_escrow.js"
+import { escrowERC20RecoveryDigest } from "@oxide/l1-contracts"
 import { OxidePortalAbi } from "@oxide/l1-contracts/abis/OxidePortal.js"
-import { buildSkyEscrowWithdrawal } from "@oxide/oxide-client/withdraw_escrows/sky.js"
 import { computeRecipientCommitment } from "@oxide/oxide-lib/recipient_commitment.js"
 import { deriveRecoveryCommitment } from "@oxide/oxide-lib/sipa_recovery.js"
 import {
@@ -313,7 +313,8 @@ export async function moveThroughSky(
       skyEscrowFactory: EthAddress.fromString(factory.address),
       dai: EthAddress.fromString(factory.dai),
       from: account.getAddress(),
-      plainWithdrawalExecutor: EthAddress.fromString(
+      // On the Sky deployment this is the Sky withdrawal executor, which redeems the shares to DAI.
+      withdrawalExecutor: EthAddress.fromString(
         tuplePortal(source.tuple, "plainWithdrawalExecutor"),
       ),
       amount: input.amountAtomic,
