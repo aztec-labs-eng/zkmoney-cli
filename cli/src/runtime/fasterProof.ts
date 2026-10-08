@@ -18,7 +18,9 @@ export interface FasterProof {
   tippedEtaSeconds: number
 }
 
-export async function quoteFasterProof(rt: Runtime): Promise<FasterProof> {
+export async function quoteFasterProof(
+  rt: Pick<Runtime, "node" | "l1" | "config" | "tuple">,
+): Promise<FasterProof> {
   const estimate = await new WithdrawalSpeedupEstimator({
     node: rt.node as never,
     publicClient: rt.l1 as never,
@@ -35,7 +37,7 @@ export async function quoteFasterProof(rt: Runtime): Promise<FasterProof> {
   }
 }
 
-const minutes = (seconds: number) => `${Math.max(1, Math.round(seconds / 60))} min`
+export const minutes = (seconds: number) => `${Math.max(1, Math.round(seconds / 60))} min`
 
 /** "about 4 min, 31 min without the tip" */
 export const fasterEta = (faster: FasterProof) =>

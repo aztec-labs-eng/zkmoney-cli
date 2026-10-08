@@ -1,16 +1,21 @@
 import { Command } from "commander"
 import { DEFAULT_DECIMALS } from "@obsidion/core/constants"
 import { amount, fail, fields, note, print, shorten, table, time, when } from "../output.ts"
+import type { Flags } from "../config.ts"
+import { bootReadOnly } from "../runtime/boot.ts"
 import {
   BRIDGES,
   BRIDGE_ASSETS,
   BRIDGE_NAMES,
+  REQUOTE_NOTE,
   bridge,
   bridgeRoutes,
   bridgeState,
   bridgeSummary,
   bridgeView,
   listBridges,
+  quoteBridgeTransfer,
+  quoteSummary,
   recoverBridge,
   waitForBridge,
   type Bridge,
@@ -142,6 +147,46 @@ export function bridgesCommand(): Command {
         )
       })
     })
+
+  cmd
+    .command("quote <amount>")
+    .description(
+      "price a bridge and send nothing: each fee, what arrives, and how long the proof takes",
+    )
+    .requiredOption("--to <address>", "the recipient's address on the destination chain")
+    .requiredOption(
+      "--chain <chain>",
+      "where it arrives, like base; `zkmoney bridges routes` lists them",
+    )
+    .option(
+      "--asset <asset>",
+      `what arrives: ${BRIDGE_ASSETS.join(" or ")} (default USDC where it goes)`,
+    )
+    .option("--via <bridge>", `${BRIDGES.join(" or ")} (default: whichever delivers more)`)
+    .option("--faster", "include a DAI prover tip for an early proof")
+    .option("--full", "print full addresses")
+    .action(
+      async (
+        amountText: string,
+        opts: {
+          to: string
+          chain: string
+          asset?: string
+          via?: string
+          faster?: boolean
+          full?: boolean
+        },
+        cmd: Command,
+      ) => {
+        const rt = await bootReadOnly(cmd.optsWithGlobals<Flags>())
+        const quoted = await quoteBridgeTransfer(rt, { ...opts, amount: amountText })
+        const { facts, items, proof } = quoteSummary(quoted, opts)
+        print(fields(facts))
+        print(`\n${table(items)}\n`)
+        print(fields([["Proof", proof]]))
+        print(`\n${REQUOTE_NOTE}`)
+      },
+    )
 
   cmd
     .command("routes")

@@ -41,19 +41,26 @@ import {
   predictCctpBridgeEscrowAddressLocally,
   type CctpBridgeEscrowArgs,
 } from "@oxide/l1-contracts/cctp_bridge_on_withdraw.js"
+import { THREE_POOL_SWAP_MAX_SLIPPAGE_BPS } from "@oxide/l1-contracts/deposit_tokens.js"
 import { quoteL1Operation } from "@oxide/oxide-client/l1_operation_quote.js"
 import {
   fetchAcrossDepositStatus,
   fetchAcrossFees,
+  type AcrossFees,
 } from "@oxide/oxide-client/withdraw_escrows/across_api.js"
 import {
   ACROSS_EVM_DESTINATIONS,
   acrossEvmDestination,
   buildAcrossBridgeOnWithdraw,
   quoteAcrossBridge,
+  type AcrossBridgeQuoteArgs,
   type AcrossBridgeRoute,
 } from "@oxide/oxide-client/withdraw_escrows/across_bridge.js"
-import { fetchCctpFees, fetchCctpMessages } from "@oxide/oxide-client/withdraw_escrows/cctp_api.js"
+import {
+  fetchCctpFees,
+  fetchCctpMessages,
+  type CctpFee,
+} from "@oxide/oxide-client/withdraw_escrows/cctp_api.js"
 import {
   CCTP_FORWARDING_EVM_DOMAINS,
   buildCctpBridgeOnWithdraw,
@@ -64,6 +71,7 @@ import {
 } from "@oxide/oxide-client/withdraw_escrows/cctp_bridge.js"
 import {
   checkedEscrowFunding,
+  swappedAtFloor,
   swappedAtPeg,
   type EscrowFundingArgs,
 } from "@oxide/oxide-client/withdraw_escrows/escrow_withdrawal.js"
@@ -72,6 +80,8 @@ import {
   encodeFunctionData,
   erc20Abi,
   formatUnits,
+  getAddress,
+  isAddress,
   keccak256,
   multicall3Abi,
   numberToHex,
@@ -86,9 +96,9 @@ import {
   type WithdrawalRecord,
 } from "../frontCore.ts"
 import { CliError, amount as formatAmount, fail, note, shorten, when } from "../output.ts"
-import type { Runtime } from "./boot.ts"
+import type { ReadOnlyRuntime, Runtime } from "./boot.ts"
 import { l1Sender, recoverEscrowTokens, recoveryAccountOf } from "./escrow.ts"
-import { quoteFasterProof, type FasterProof } from "./fasterProof.ts"
+import { minutes, quoteFasterProof, type FasterProof } from "./fasterProof.ts"
 import { Records, type OperationRecord } from "./records.ts"
 import { activateNetwork, parseSendAmount, refuseInterrupted, sponsorOrFail } from "./send.ts"
 import { noteSubscribed } from "./sponsor.ts"
@@ -234,10 +244,10 @@ const ESCROWS = {
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
-const manifestEntries = new WeakMap<Runtime, Promise<Record<string, unknown>>>()
+const manifestEntries = new WeakMap<ReadOnlyRuntime, Promise<Record<string, unknown>>>()
 
 /** The pinned manifest entry as published, which names the bridge factories the wallet's tuple leaves out. */
-function manifestEntry(rt: Runtime): Promise<Record<string, unknown>> {
+function manifestEntry(rt: ReadOnlyRuntime): Promise<Record<string, unknown>> {
   let entry = manifestEntries.get(rt)
   if (!entry) {
     entry = (async () => {
@@ -261,7 +271,7 @@ const daiAbi = [
 ] as const
 
 /** A bridge's escrow factory: a setting, else the manifest's, checked to escrow this deployment's DAI. */
-async function bridgeFactory(rt: Runtime, bridge: Bridge): Promise<Address> {
+async function bridgeFactory(rt: ReadOnlyRuntime, bridge: Bridge): Promise<Address> {
   const { field } = ESCROWS[bridge]
   const named = rt.config.bridgeEscrowFactories[bridge]?.value ?? (await manifestEntry(rt))[field]
   if (named === undefined)
@@ -293,7 +303,7 @@ const SIMULATION_TIP = 1n
  * funding by state override, plus the wallet's margin.
  */
 async function quoteRunTip(
-  rt: Runtime,
+  rt: ReadOnlyRuntime,
   run: { factory: Address; calldata: Hex; escrow: Address; funding: bigint },
 ): Promise<bigint> {
   const dai = rt.tuple.token as Address
@@ -332,10 +342,19 @@ const CCTP_FINALITY = CctpFinality.Fast
 export interface BridgeQuote {
   route: BridgeRoute
   factory: Address
-  /** DAI the escrow pays whoever runs it. */
+  /** DAI, 18 decimals: the burn, and every fee that comes off it before the swap. */
+  amount: bigint
+  releaseTip: bigint
+  fpcFundingCut: bigint
+  proverTip: bigint
+  /** Paid to whoever runs the escrow on Ethereum. */
   escrowTip: bigint
-  /** Across's fee in its input token, or the most Circle takes in USDC: 6 decimals either way. */
+  /** What the escrow swaps: the amount less every DAI fee. */
+  swapInput: bigint
+  /** Across's fee in its input token, or the most Circle takes, in USDC: 6 decimals either way. */
   bridgeFee: bigint
+  /** USDC (6 decimals) the destination keeps from a first deposit: HyperCore's account activation. */
+  activationFee: bigint
   /** What arrives, in the delivered token's units: at a 1:1 swap, and at the swap's floor. */
   expected: bigint
   minReceived: bigint
@@ -351,9 +370,56 @@ interface BurnFunding {
   recipient: Address
 }
 
+const dai = (atomic: bigint) => formatAmount(atomic, DEFAULT_DECIMALS, "DAI")
+const LARGER = "a larger amount clears it"
+
+/** Says which of Across's published limits a deposit breaks; one it cannot place is rethrown. */
+function refuseAcross(
+  err: unknown,
+  args: AcrossBridgeQuoteArgs,
+  fees: AcrossFees,
+  asset: BridgeAsset,
+): never {
+  if (args.route.acrossOutputTokenDecimals !== fees.acrossOutputTokenDecimals) throw err
+  const units = (atomic: bigint) => formatAmount(atomic, ACROSS_INPUT_TOKEN_DECIMALS, asset)
+  const most = swappedAtPeg(args)
+  const least = swappedAtFloor(args)
+  if (most > fees.maxDeposit)
+    fail(
+      `Across takes at most ${units(
+        fees.maxDeposit,
+      )} a deposit on this route, and this would deposit ${units(most)}`,
+      "bridge less at a time",
+    )
+  if (least < fees.minDeposit)
+    fail(
+      `Across takes at least ${units(
+        fees.minDeposit,
+      )} a deposit on this route, and this could deposit as little as ${units(least)}`,
+      LARGER,
+    )
+  fail(`Across's fee would take all of the ${units(least)} this could deposit`, LARGER)
+}
+
+/** Says why Circle would not deliver a burn: no forwarding, or less than the destination's minimum. */
+function refuseCctp(fees: CctpFee[], destination: CctpBridgeDestination, chain: string): never {
+  const usdc = (atomic: bigint) => formatAmount(atomic, 6, "USDC")
+  if (!fees.find((fee) => fee.finalityThreshold === CCTP_FINALITY)?.forwardFee)
+    fail(`Circle does not forward fast transfers to ${chain}`, "`--via across` may reach it")
+  const activation = destination.deliveryFee
+    ? ` and the ${usdc(destination.deliveryFee)} activation fee`
+    : ""
+  fail(
+    `${chain} needs at least ${usdc(
+      destination.minReceived,
+    )} to arrive, and after Circle's fee${activation} less would`,
+    LARGER,
+  )
+}
+
 /** One route's quote. The run's gas does not depend on the bridge fee, so the fee quoted before the tip prices it. */
 async function quoteRoute(
-  rt: Runtime,
+  rt: ReadOnlyRuntime,
   route: BridgeRoute,
   burn: BurnFunding,
 ): Promise<BridgeQuote> {
@@ -366,39 +432,64 @@ async function quoteRoute(
     relayerTip: 0n,
   }
   const escrowFunding = checkedEscrowFunding(funding)
-  const runTip = (args: EscrowArgs) =>
-    quoteRunTip(rt, {
+  const runTip = async (args: EscrowArgs) => {
+    const tip = await quoteRunTip(rt, {
       factory,
       calldata: ESCROWS[route.bridge].run(args),
       escrow: ESCROWS[route.bridge].predict(factory, args),
       funding: escrowFunding,
     })
+    if (tip >= escrowFunding)
+      fail(
+        `after the withdrawal fees, the ${dai(
+          escrowFunding,
+        )} left does not cover running the escrow, which costs ${dai(tip)}`,
+        LARGER,
+      )
+    return tip
+  }
   const simulated = {
     recipient: burn.recipient,
     recoveryCommitment: SIMULATION_RECOVERY,
     relayerTip: SIMULATION_TIP,
     nonce: SIMULATION_NONCE,
   }
-  const common = { route, factory }
+  const daiSide = (escrowTip: bigint) => ({
+    route,
+    factory,
+    amount: burn.amount,
+    releaseTip: WITHDRAW_RELAYER_TIP,
+    fpcFundingCut: burn.fpcFundingCut,
+    proverTip: burn.proverTip,
+    escrowTip,
+    swapInput: escrowFunding - escrowTip,
+  })
   if (route.bridge === "across") {
     const across = acrossEvmDestination(route.asset, route.chain as never)
     const fees = await fetchAcrossFees({ ...funding, route: across })
+    const price = (relayerTip: bigint) => {
+      const args = { ...funding, relayerTip, route: across }
+      try {
+        return { args, ...quoteAcrossBridge(args, fees) }
+      } catch (err) {
+        refuseAcross(err, args, fees, route.asset)
+      }
+    }
     const escrowTip = await runTip({
       ...simulated,
       acrossInputToken: across.acrossInputToken.toString() as Address,
       destinationChainId: across.destinationChainId,
       acrossOutputToken: across.acrossOutputToken.toString() as Address,
       acrossOutputTokenDecimals: across.acrossOutputTokenDecimals,
-      acrossFee: quoteAcrossBridge({ ...funding, route: across }, fees).acrossFee,
+      acrossFee: price(0n).acrossFee,
     })
-    const priced = { ...funding, relayerTip: escrowTip, route: across }
-    const { acrossFee, minReceived } = quoteAcrossBridge(priced, fees)
+    const { args, acrossFee, minReceived } = price(escrowTip)
     const scale = 10n ** BigInt(across.acrossOutputTokenDecimals - ACROSS_INPUT_TOKEN_DECIMALS)
     return {
-      ...common,
-      escrowTip,
+      ...daiSide(escrowTip),
       bridgeFee: acrossFee,
-      expected: (swappedAtPeg(priced) - acrossFee) * scale,
+      activationFee: 0n,
+      expected: (swappedAtPeg(args) - acrossFee) * scale,
       minReceived,
       decimals: across.acrossOutputTokenDecimals,
       across,
@@ -409,21 +500,27 @@ async function quoteRoute(
       ? await hyperCoreDestination(EthAddress.fromString(burn.recipient))
       : cctpEvmDestination(route.chain as never)
   const fees = await fetchCctpFees(cctp)
-  const finality = { destination: cctp, minFinalityThreshold: CCTP_FINALITY }
+  const price = (relayerTip: bigint) => {
+    const args = { ...funding, relayerTip, destination: cctp, minFinalityThreshold: CCTP_FINALITY }
+    try {
+      return { args, ...quoteCctpBridge(args, fees) }
+    } catch {
+      refuseCctp(fees, cctp, route.chain)
+    }
+  }
   const escrowTip = await runTip({
     ...simulated,
     route: cctp.route,
     destinationDomain: cctp.domain,
     minFinalityThreshold: CCTP_FINALITY,
-    maxFee: quoteCctpBridge({ ...funding, ...finality }, fees).maxFee,
+    maxFee: price(0n).maxFee,
   })
-  const priced = { ...funding, ...finality, relayerTip: escrowTip }
-  const { maxFee, minReceived } = quoteCctpBridge(priced, fees)
+  const { args, maxFee, minReceived } = price(escrowTip)
   return {
-    ...common,
-    escrowTip,
+    ...daiSide(escrowTip),
     bridgeFee: maxFee,
-    expected: swappedAtPeg(priced) - maxFee - cctp.deliveryFee,
+    activationFee: cctp.deliveryFee,
+    expected: swappedAtPeg(args) - maxFee - cctp.deliveryFee,
     minReceived,
     decimals: 6,
     cctp,
@@ -434,10 +531,13 @@ const atWad = (quote: BridgeQuote) => quote.minReceived * 10n ** BigInt(18 - quo
 
 /** Quotes each route and keeps the one that delivers the most at the swap's floor. */
 export async function quoteBridge(
-  rt: Runtime,
+  rt: ReadOnlyRuntime,
   routes: BridgeRoute[],
   burn: BurnFunding,
 ): Promise<BridgeQuote> {
+  const withdrawalFees = WITHDRAW_RELAYER_TIP + burn.fpcFundingCut + burn.proverTip
+  if (burn.amount <= withdrawalFees)
+    fail(`${dai(burn.amount)} does not cover the withdrawal fees of ${dai(withdrawalFees)}`, LARGER)
   const settled = await Promise.allSettled(routes.map((route) => quoteRoute(rt, route, burn)))
   const quotes = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []))
   if (!quotes.length) {
@@ -456,6 +556,145 @@ export async function quoteBridge(
     )
   }
   return quotes.reduce((best, quote) => (atWad(quote) > atWad(best) ? quote : best))
+}
+
+export interface BridgeQuoteInput {
+  amount: string
+  to: string
+  chain: string
+  asset?: string
+  via?: string
+  /** Include a DAI prover tip for an early proof. */
+  faster?: boolean
+}
+
+export interface QuotedBridge {
+  /** When it was priced: gas and the bridges' fees move. */
+  quotedAt: Date
+  recipient: Address
+  quote: BridgeQuote
+  /** The proof's wait without a prover tip and with one, and that tip. */
+  proof?: FasterProof
+  /** Why the node gave no estimate of the proof's wait. */
+  proofError?: string
+}
+
+type ProofEstimate = { proof?: FasterProof; error?: unknown }
+
+const firstLine = (err: unknown) =>
+  (err instanceof Error ? err.message : String(err)).split("\n")[0]!
+
+/** Why the node gave no proof estimate, and what fixes a missing key. */
+const proofRefusal = (err: unknown) =>
+  /Error 40[13] from server/.test(firstLine(err))
+    ? "the node wants a key; `zkmoney config set node.apiKey <key>` saves one"
+    : firstLine(err)
+
+/** Prices a bridge as `bridge` does, from reads alone: it unlocks, signs and writes nothing. */
+export async function quoteBridgeTransfer(
+  rt: ReadOnlyRuntime,
+  input: BridgeQuoteInput,
+): Promise<QuotedBridge> {
+  const chain = parseChain(input.chain)
+  const via = input.via ? parseBridge(input.via) : undefined
+  const routes = routesTo(chain, input.asset ? parseBridgeAsset(input.asset) : undefined, via)
+  const amount = parseSendAmount(input.amount, DEFAULT_DECIMALS).atomic
+  const to = input.to.trim()
+  if (!isAddress(to))
+    fail(
+      `"${input.to}" is not an address`,
+      "a quote takes the address itself and reads no contacts",
+    )
+  const recipient = getAddress(to)
+  const [cut, estimate] = await Promise.all([
+    fpcFundingCut(rt),
+    quoteFasterProof(rt).then<ProofEstimate, ProofEstimate>(
+      (proof) => ({ proof }),
+      (error: unknown) => ({ error }),
+    ),
+  ])
+  if (!estimate.proof && input.faster) throw estimate.error
+  const quote = await quoteBridge(rt, routes, {
+    amount,
+    proverTip: input.faster && estimate.proof ? estimate.proof.proverTip : 0n,
+    fpcFundingCut: cut,
+    recipient,
+  })
+  return {
+    quotedAt: new Date(),
+    recipient,
+    quote,
+    ...(estimate.proof ? { proof: estimate.proof } : { proofError: proofRefusal(estimate.error) }),
+  }
+}
+
+export const REQUOTE_NOTE =
+  "Gas and the bridges' fees move, so `zkmoney bridge` prices the route again when it submits and commits to that price, not this one."
+
+/** Fees are small, so a quote shows four places. */
+const QUOTE_PLACES = 4
+
+/** "2026-10-08 18:02:11 UTC" */
+const utcStamp = (date: Date) => `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`
+
+/** The proof's wait: with the tip it bought, or without one and what one would cost. */
+function proofWait(quoted: QuotedBridge, inDai: (atomic: bigint) => string): string {
+  const { proof, quote } = quoted
+  if (!proof) return `unknown: ${quoted.proofError}`
+  const fast = minutes(proof.tippedEtaSeconds)
+  const slow = minutes(proof.standardEtaSeconds)
+  return quote.proverTip
+    ? `about ${fast} with the prover tip, ${slow} without`
+    : `about ${slow}; ${fast} with --faster, for a ${inDai(proof.proverTip)} prover tip`
+}
+
+/** What `bridges quote` prints: the quote's facts, each fee and what arrives, and the proof's wait. */
+export function quoteSummary(
+  quoted: QuotedBridge,
+  opts: { full?: boolean } = {},
+): { facts: [string, string][]; items: string[][]; proof: string } {
+  const { quote } = quoted
+  const { asset, bridge, chain } = quote.route
+  const inDai = (atomic: bigint) => formatAmount(atomic, DEFAULT_DECIMALS, "DAI", QUOTE_PLACES)
+  const inFeeToken = (atomic: bigint) => formatAmount(atomic, 6, asset, QUOTE_PLACES)
+  const arriving = (atomic: bigint) => formatAmount(atomic, quote.decimals, asset, QUOTE_PLACES)
+  const floor = `${Number(THREE_POOL_SWAP_MAX_SLIPPAGE_BPS) / 100}%`
+  return {
+    facts: [
+      ["Quoted", utcStamp(quoted.quotedAt)],
+      ["Route", routeLabel(quote.route)],
+      ["To", `${shorten(quoted.recipient, opts.full)} on ${chain}`],
+      ["Spend", `${inDai(quote.amount)}, fees included`],
+    ],
+    items: [
+      [
+        "Release tip",
+        inDai(quote.releaseTip),
+        "withdrawal fee, to the relayer that releases the burn",
+      ],
+      ["Portal cut", inDai(quote.fpcFundingCut), "withdrawal fee, the portal's funding cut"],
+      ...(quote.proverTip
+        ? [["Prover tip", inDai(quote.proverTip), "--faster, for an early proof"]]
+        : []),
+      ["Escrow run", inDai(quote.escrowTip), "to whoever runs the escrow on Ethereum"],
+      ["Swapped", inDai(quote.swapInput), `to ${asset} on Curve, at most ${floor} under 1:1`],
+      [
+        "Bridge fee",
+        inFeeToken(quote.bridgeFee),
+        bridge === "cctp" ? "the most Circle takes" : "to Across",
+      ],
+      quote.activationFee
+        ? ["Activation fee", inFeeToken(quote.activationFee), `${chain}'s fee on a first deposit`]
+        : [
+            "Activation fee",
+            inFeeToken(0n),
+            chain === HYPERCORE ? "none: the account already exists" : `${chain} charges none`,
+          ],
+      ["Expected", arriving(quote.expected), "at 1:1"],
+      ["Minimum", arriving(quote.minReceived), "at the swap's floor"],
+    ],
+    proof: proofWait(quoted, inDai),
+  }
 }
 
 /** Across's or Circle's latest word on the delivery. */
@@ -578,14 +817,6 @@ export async function bridge(
   const faster = input.faster ? await quoteFasterProof(rt) : undefined
   const proverTip = faster?.proverTip ?? 0n
   const cut = await fpcFundingCut(rt)
-  if (amount.atomic <= WITHDRAW_RELAYER_TIP + cut + proverTip)
-    fail(
-      `the amount does not cover the withdrawal fee of ${formatAmount(
-        WITHDRAW_RELAYER_TIP + cut + proverTip,
-        token.decimals,
-        token.symbol,
-      )}`,
-    )
   const quote = await quoteBridge(rt, routes, {
     amount: amount.atomic,
     proverTip,
