@@ -224,13 +224,14 @@ export interface WithdrawalQuote {
 /**
  * What a route costs. The direct route is the tip plus the portal's cut; a swap route also
  * simulates the relayer's run and prices its tip off that, so the quote is the one the escrow
- * commits to.
+ * commits to. A prover tip comes out of the burn before the swap sees it.
  */
 export async function quoteWithdrawal(
   rt: Runtime,
   asset: WithdrawAsset,
   amountAtomic: bigint,
   recipient: Address,
+  proverTip = 0n,
 ): Promise<WithdrawalQuote> {
   const cut = await fpcFundingCut(rt)
   if (asset === "DAI") {
@@ -246,10 +247,10 @@ export async function quoteWithdrawal(
   }
   if (!rt.tuple.swapEscrowFactory)
     fail(`${asset} withdrawals are not available on ${rt.network}`, "withdraw DAI instead")
-  if (amountAtomic <= WITHDRAW_RELAYER_TIP + cut)
+  if (amountAtomic <= WITHDRAW_RELAYER_TIP + cut + proverTip)
     fail(
       `the amount does not cover the withdrawal fee of ${formatAmount(
-        WITHDRAW_RELAYER_TIP + cut,
+        WITHDRAW_RELAYER_TIP + cut + proverTip,
         DEFAULT_DECIMALS,
         "DAI",
       )}`,
@@ -269,7 +270,7 @@ export async function quoteWithdrawal(
     const simulation = await simulator.simulate({
       output: asset,
       amount: amountAtomic,
-      deductions: { withdrawalRelayerTip: WITHDRAW_RELAYER_TIP, proverTip: 0n, fpcFundingCut: cut },
+      deductions: { withdrawalRelayerTip: WITHDRAW_RELAYER_TIP, proverTip, fpcFundingCut: cut },
       recipient,
     })
     return {
@@ -299,6 +300,7 @@ export async function planSwapLeg(
   quote: WithdrawalQuote,
   recipient: Address,
   amountAtomic: bigint,
+  proverTip: bigint,
 ): Promise<SwapLeg | undefined> {
   if (quote.asset === "DAI") return undefined
   if (!quote.swap) fail("the swap could not be priced", "withdraw DAI instead")
@@ -316,7 +318,7 @@ export async function planSwapLeg(
     l1Recipient: recipient,
     amount: amountAtomic,
     withdrawalRelayerTip: WITHDRAW_RELAYER_TIP,
-    proverTip: 0n,
+    proverTip,
     fpcFundingCut: await fpcFundingCut(rt),
     relayerTip: quote.swap.relayerTip,
     recovery: {
@@ -426,7 +428,7 @@ export interface WithdrawInput {
   to: string
   asset?: string
   key?: string
-  /** Pay a prover tip for an early proof; DAI withdrawals only. */
+  /** Pay a DAI prover tip for an early proof. */
   faster?: boolean
 }
 
@@ -463,8 +465,6 @@ export async function withdraw(
   onStage("building")
   await activateNetwork(rt)
   const asset = parseWithdrawAsset(input.asset ?? rt.config.defaults.withdrawAsset)
-  if (input.faster && asset !== "DAI")
-    fail("only a DAI withdrawal can buy an early proof", "drop --asset or --faster")
   const tokenService = await rt.tokenService()
   const token = await tokenService.fetchTokenInformation()
   const amount = parseSendAmount(input.amount, token.decimals)
@@ -491,9 +491,9 @@ export async function withdraw(
       ),
     )
   if (!verdict.compliant) fail(verdict.reason?.message ?? "this address cannot receive withdrawals")
-  const quote = await quoteWithdrawal(rt, asset, amount.atomic, recipient.address)
   const faster = input.faster ? await quoteFasterProof(rt) : undefined
   const proverTip = faster?.proverTip ?? 0n
+  const quote = await quoteWithdrawal(rt, asset, amount.atomic, recipient.address, proverTip)
   if (amount.atomic <= quote.fee.floorAtomic + proverTip)
     fail(
       `the amount does not cover the fee of ${formatAmount(
@@ -513,7 +513,7 @@ export async function withdraw(
     )
   const handle = await records.once<WithdrawalHandle>(WITHDRAWAL_KIND, id, args, async () => {
     const sponsor = await sponsorOrFail(rt, unlocked.file.identity?.tag)
-    const swap = await planSwapLeg(rt, quote, recipient.address, amount.atomic)
+    const swap = await planSwapLeg(rt, quote, recipient.address, amount.atomic, proverTip)
     const seed = { recipient: recipient.address, ...swapRecordFields(swap, quote.swap) }
     const exit = {
       l1Recipient: EthAddress.fromString(withdrawalRecipients(seed).release),

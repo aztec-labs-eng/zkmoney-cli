@@ -45,7 +45,7 @@ export function withdrawCommand(): Command {
     .requiredOption("--to <recipient>", "an Ethereum address or a saved Ethereum contact's name")
     .option("--asset <asset>", `what arrives: ${WITHDRAW_ASSETS.join(", ")} (default from config)`)
     .option("--idempotency-key <key>", "a retry with the same key returns the same withdrawal")
-    .option("--faster", "pay a DAI prover tip so the proof comes before its epoch ends (DAI only)")
+    .option("--faster", "pay a DAI prover tip so the proof comes before its epoch ends")
     .option("--wait", "follow the withdrawal until the funds land on Ethereum")
     .option("--interval <seconds>", "seconds between checks while waiting", "20")
     .option("--full", "print full addresses and hashes")

@@ -112,7 +112,7 @@ zkmoney withdrawals get wd-7
 zkmoney withdrawals list
 ```
 
-A DAI withdrawal pays the address directly; USDC, USDT and ETH go through a swap on L1 and pay what the swap returns (mainnet only). The payout waits for the rollup to prove the burn's block, which takes minutes on mainnet and can take much longer on testnet. The recipient address is screened on mainnet; a refused address fails before anything is burned. `withdrawals get` shows the phase from burn to payout and the L1 hash once paid. `--faster` pays a DAI prover tip so the burn's proof comes before its epoch ends, and prints the wait with and without the tip; it takes DAI withdrawals only.
+A DAI withdrawal pays the address directly; USDC, USDT and ETH go through a swap on L1 and pay what the swap returns (mainnet only). The payout waits for the rollup to prove the burn's block, which takes minutes on mainnet and can take much longer on testnet. The recipient address is screened on mainnet; a refused address fails before anything is burned. `withdrawals get` shows the phase from burn to payout and the L1 hash once paid. `--faster` pays a DAI prover tip so the burn's proof comes before its epoch ends, whatever asset arrives, and prints the wait with and without the tip.
 
 ## Savings
 
