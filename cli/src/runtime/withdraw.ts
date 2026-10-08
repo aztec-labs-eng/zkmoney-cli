@@ -224,13 +224,14 @@ export interface WithdrawalQuote {
 /**
  * What a route costs. The direct route is the tip plus the portal's cut; a swap route also
  * simulates the relayer's run and prices its tip off that, so the quote is the one the escrow
- * commits to.
+ * commits to. A prover tip comes out of the burn before the swap sees it.
  */
 export async function quoteWithdrawal(
   rt: Runtime,
   asset: WithdrawAsset,
   amountAtomic: bigint,
   recipient: Address,
+  proverTip = 0n,
 ): Promise<WithdrawalQuote> {
   const cut = await fpcFundingCut(rt)
   if (asset === "DAI") {
@@ -244,18 +245,18 @@ export async function quoteWithdrawal(
       },
     }
   }
-  if (!rt.tuple.swapEscrowFactory)
+  if (!rt.tuple.swapEscrowFactoryV2)
     fail(`${asset} withdrawals are not available on ${rt.network}`, "withdraw DAI instead")
-  if (amountAtomic <= WITHDRAW_RELAYER_TIP + cut)
+  if (amountAtomic <= WITHDRAW_RELAYER_TIP + cut + proverTip)
     fail(
       `the amount does not cover the withdrawal fee of ${formatAmount(
-        WITHDRAW_RELAYER_TIP + cut,
+        WITHDRAW_RELAYER_TIP + cut + proverTip,
         DEFAULT_DECIMALS,
         "DAI",
       )}`,
     )
   const simulator = new SwapOnWithdrawSimulator(rt.l1 as never, {
-    swapEscrowFactory: tuplePortal(rt.tuple, "swapEscrowFactory"),
+    swapEscrowFactoryV2: tuplePortal(rt.tuple, "swapEscrowFactoryV2"),
     operationExecutor: tuplePortal(rt.tuple, "operationExecutor"),
     token: tuplePortal(rt.tuple, "token"),
   })
@@ -269,7 +270,7 @@ export async function quoteWithdrawal(
     const simulation = await simulator.simulate({
       output: asset,
       amount: amountAtomic,
-      deductions: { withdrawalRelayerTip: WITHDRAW_RELAYER_TIP, proverTip: 0n, fpcFundingCut: cut },
+      deductions: { withdrawalRelayerTip: WITHDRAW_RELAYER_TIP, proverTip, fpcFundingCut: cut },
       recipient,
     })
     return {
@@ -299,11 +300,12 @@ export async function planSwapLeg(
   quote: WithdrawalQuote,
   recipient: Address,
   amountAtomic: bigint,
+  proverTip: bigint,
 ): Promise<SwapLeg | undefined> {
   if (quote.asset === "DAI") return undefined
   if (!quote.swap) fail("the swap could not be priced", "withdraw DAI instead")
   tuplePortal(rt.tuple, "l2Broadcaster")
-  const factory = tuplePortal(rt.tuple, "swapEscrowFactory")
+  const factory = tuplePortal(rt.tuple, "swapEscrowFactoryV2")
   const keys = await keysOf(rt)
   const account = await createOxideL1Reader(rt.l1).predictAccountAddress(
     resolveOxideAccountFactory({ tuple: rt.tuple }),
@@ -311,12 +313,12 @@ export async function planSwapLeg(
   )
   const nonce = Fr.random().toString() as Hex
   const plan = planSwapOnWithdraw({
-    swapEscrowFactory: factory,
+    swapEscrowFactoryV2: factory,
     output: quote.asset,
     l1Recipient: recipient,
     amount: amountAtomic,
     withdrawalRelayerTip: WITHDRAW_RELAYER_TIP,
-    proverTip: 0n,
+    proverTip,
     fpcFundingCut: await fpcFundingCut(rt),
     relayerTip: quote.swap.relayerTip,
     recovery: {
@@ -331,7 +333,7 @@ export async function planSwapLeg(
 /** How a burn settles: the deployment, the portal's state for the sdk's tip check, and the swap leg. */
 export async function withdrawalOptions(rt: Runtime, swap?: SwapLeg): Promise<WithdrawalOptions> {
   const portal = await readPortalWithdrawalState(rt.l1 as never, tuplePortal(rt.tuple, "portal"))
-  return { tuple: rt.tuple, portal, ...(swap ? { swap: swap.plan } : {}) }
+  return { tuple: rt.tuple, portal, ...(swap ? { swap: { ...swap.plan, l1: rt.l1 } } : {}) }
 }
 
 function swapRecordFields(
@@ -343,6 +345,7 @@ function swapRecordFields(
     swapOutput: swap.output,
     swapEscrow: swap.plan.escrow,
     swapEscrowFactory: swap.factory,
+    swapEscrowLayout: "v2",
     swapRecoveryCommitment: swap.plan.escrowArgs.recoveryCommitment,
     swapNonce: swap.plan.escrowArgs.nonce,
     swapRelayerTip: swap.plan.escrowArgs.relayerTip.toString(),
@@ -426,7 +429,7 @@ export interface WithdrawInput {
   to: string
   asset?: string
   key?: string
-  /** Pay a prover tip for an early proof; DAI withdrawals only. */
+  /** Pay a DAI prover tip for an early proof. */
   faster?: boolean
 }
 
@@ -463,8 +466,6 @@ export async function withdraw(
   onStage("building")
   await activateNetwork(rt)
   const asset = parseWithdrawAsset(input.asset ?? rt.config.defaults.withdrawAsset)
-  if (input.faster && asset !== "DAI")
-    fail("only a DAI withdrawal can buy an early proof", "drop --asset or --faster")
   const tokenService = await rt.tokenService()
   const token = await tokenService.fetchTokenInformation()
   const amount = parseSendAmount(input.amount, token.decimals)
@@ -491,9 +492,9 @@ export async function withdraw(
       ),
     )
   if (!verdict.compliant) fail(verdict.reason?.message ?? "this address cannot receive withdrawals")
-  const quote = await quoteWithdrawal(rt, asset, amount.atomic, recipient.address)
   const faster = input.faster ? await quoteFasterProof(rt) : undefined
   const proverTip = faster?.proverTip ?? 0n
+  const quote = await quoteWithdrawal(rt, asset, amount.atomic, recipient.address, proverTip)
   if (amount.atomic <= quote.fee.floorAtomic + proverTip)
     fail(
       `the amount does not cover the fee of ${formatAmount(
@@ -513,7 +514,7 @@ export async function withdraw(
     )
   const handle = await records.once<WithdrawalHandle>(WITHDRAWAL_KIND, id, args, async () => {
     const sponsor = await sponsorOrFail(rt, unlocked.file.identity?.tag)
-    const swap = await planSwapLeg(rt, quote, recipient.address, amount.atomic)
+    const swap = await planSwapLeg(rt, quote, recipient.address, amount.atomic, proverTip)
     const seed = { recipient: recipient.address, ...swapRecordFields(swap, quote.swap) }
     const exit = {
       l1Recipient: EthAddress.fromString(withdrawalRecipients(seed).release),
@@ -636,18 +637,18 @@ export function withdrawalSummary(
 }
 
 /**
- * Follow a record until it settles, reporting each phase change. This loop drives the tracker's
- * ticks itself. Ctrl-C stops the wait; the record keeps advancing on any later run.
+ * Run `tick` every `intervalMs` until `done` holds, reporting each change of `key`. Ctrl-C stops the
+ * wait and returns the last value; nothing is lost, as the next run picks up from the chain.
  */
-export async function waitForWithdrawal(
-  rt: Runtime,
-  localId: string,
-  onPhase: (record: WithdrawalRecord) => void,
-  intervalMs = 20_000,
-): Promise<WithdrawalRecord> {
-  const store = WithdrawalStorage.get(rt.storage)
-  const tracker = await withdrawalTracker(rt)
-  tracker.stop()
+export async function follow<T>(
+  tick: () => Promise<T>,
+  opts: {
+    key: (value: T) => string
+    done: (value: T) => boolean
+    onChange: (value: T) => void
+    intervalMs: number
+  },
+): Promise<T> {
   let stopped = false
   let wake: (() => void) | undefined
   const stop = () => {
@@ -669,25 +670,49 @@ export async function waitForWithdrawal(
   process.once("SIGINT", stop)
   process.once("SIGTERM", stop)
   let last: string | undefined
-  let record = store.get(localId)
-  if (!record) fail(`no withdrawal ${localId}`)
   try {
-    while (!stopped) {
-      await tracker.syncOnce()
-      record = store.get(localId) ?? record
-      const key = `${record.phase}|${record.l1TxHash ?? ""}|${record.swapExecuteTxHash ?? ""}`
+    for (;;) {
+      const value = await tick()
+      const key = opts.key(value)
       if (key !== last) {
         last = key
-        onPhase(record)
+        opts.onChange(value)
       }
-      if (isTerminal(record)) break
-      await sleep(intervalMs)
+      if (stopped || opts.done(value)) return value
+      await sleep(opts.intervalMs)
+      if (stopped) return value
     }
-    return record
   } finally {
     process.off("SIGINT", stop)
     process.off("SIGTERM", stop)
   }
+}
+
+/** Follow a record until it settles, driving the tracker's ticks itself. */
+export async function waitForWithdrawal(
+  rt: Runtime,
+  localId: string,
+  onPhase: (record: WithdrawalRecord) => void,
+  intervalMs = 20_000,
+): Promise<WithdrawalRecord> {
+  const store = WithdrawalStorage.get(rt.storage)
+  const tracker = await withdrawalTracker(rt)
+  tracker.stop()
+  let record = store.get(localId)
+  if (!record) fail(`no withdrawal ${localId}`)
+  return follow(
+    async () => {
+      await tracker.syncOnce()
+      record = store.get(localId) ?? record!
+      return record
+    },
+    {
+      key: (r) => `${r.phase}|${r.l1TxHash ?? ""}|${r.swapExecuteTxHash ?? ""}`,
+      done: isTerminal,
+      onChange: onPhase,
+      intervalMs,
+    },
+  )
 }
 
 /** Stop the watcher's timer so the process can exit. */

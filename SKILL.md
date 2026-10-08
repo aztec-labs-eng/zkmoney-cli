@@ -1,6 +1,6 @@
 ---
 name: zkmoney-cli
-description: Operate a zk.money wallet from the terminal or from an agent - register a tag, receive deposits from Ethereum, check the balance and history, pay tags, withdraw to Ethereum, make and claim paylinks. Use when a task says "zk.money", "zkmoney", "pay <tag>", "deposit address", or needs private payments on Aztec mainnet.
+description: Operate a zk.money wallet from the terminal or from an agent - register a tag, receive deposits from Ethereum, check the balance and history, pay tags, withdraw to Ethereum, bridge USDC or USDT to other chains, make and claim paylinks. Use when a task says "zk.money", "zkmoney", "pay <tag>", "deposit address", or needs private payments on Aztec mainnet.
 ---
 
 # zkmoney CLI
@@ -112,7 +112,19 @@ zkmoney withdrawals get wd-7
 zkmoney withdrawals list
 ```
 
-A DAI withdrawal pays the address directly; USDC, USDT and ETH go through a swap on L1 and pay what the swap returns (mainnet only). The payout waits for the rollup to prove the burn's block, which takes minutes on mainnet and can take much longer on testnet. The recipient address is screened on mainnet; a refused address fails before anything is burned. `withdrawals get` shows the phase from burn to payout and the L1 hash once paid. `--faster` pays a DAI prover tip so the burn's proof comes before its epoch ends, and prints the wait with and without the tip; it takes DAI withdrawals only.
+A DAI withdrawal pays the address directly; USDC, USDT and ETH go through a swap on L1 and pay what the swap returns (mainnet only). The payout waits for the rollup to prove the burn's block, which takes minutes on mainnet and can take much longer on testnet. The recipient address is screened on mainnet; a refused address fails before anything is burned. `withdrawals get` shows the phase from burn to payout and the L1 hash once paid. `--faster` pays a DAI prover tip so the burn's proof comes before its epoch ends, whatever asset arrives, and prints the wait with and without the tip.
+
+## Bridging to another chain
+
+```sh
+zkmoney bridge 100 --to 0xabc… --chain base [--asset USDC|USDT] [--via across|cctp] [--faster] --idempotency-key br-1 [--wait]
+zkmoney bridges get br-1
+zkmoney bridges list
+zkmoney bridges routes                    # every chain, and what Across and CCTP deliver there
+zkmoney bridges recover br-1 [--to 0x…]   # free an escrow nobody ran, or one Across refunded
+```
+
+A bridge is a withdrawal into an escrow on Ethereum (mainnet only). Oxide's relayer releases the burn to the escrow and runs it; the escrow swaps the DAI to USDC or USDT on Curve's 3pool, and Across or Circle's CCTP delivers it to `--to` on `--chain`. `--asset` defaults to USDC where a route delivers it, else USDT. Without `--via` the CLI quotes every route to that chain and takes the one that delivers the most. `--to` is an address on the destination chain or a saved Ethereum contact; on `hyperCore` it is the Hyperliquid account, which pays 1 USDC on its first deposit. The fees are the withdrawal's own, a DAI tip for whoever runs the escrow, and the bridge's fee. The output says what arrives at a 1:1 swap and at the swap's 1% floor. `--faster` pays a DAI prover tip for an early proof, as on `withdraw`. `bridges get` follows a bridge from burn to arrival. If the relayer never runs the escrow, `bridges recover` runs it. If Across refunds a deposit it could not fill, the refund sits in the escrow, and `bridges recover --to <address>` sends it to Ethereum. Both need `ZKMONEY_L1_PRIVATE_KEY` for gas. The escrow factories come from the oxide manifest, and `addresses.acrossBridgeEscrowFactory` and `addresses.cctpBridgeEscrowFactory` override it.
 
 ## Savings
 
@@ -154,7 +166,7 @@ zkmoney config set node.url https://…     # pin one for this network; flag > e
 zkmoney config unset node.url
 ```
 
-Keys: `profile`, `profileUrl`, `node.url`, `node.apiKey`, `l1.rpc`, `accountService.url`, `addresses.{registry,portal,token,claimFpc}`, `defaults.{asset,withdrawAsset}`. `profile` is kept for the home (`~/.zkmoney/config.json`); `config set` keeps every other key for the network in use (`~/.zkmoney/<network>/config.json`). Environment equivalents are `ZKMONEY_<KEY>` (`ZKMONEY_NODE_URL`, `ZKMONEY_L1_RPC`, …). `--home <dir>` moves everything.
+Keys: `profile`, `profileUrl`, `node.url`, `node.apiKey`, `l1.rpc`, `accountService.url`, `addresses.{registry,portal,token,claimFpc,sUSDSPortal,skyEscrowFactory,acrossBridgeEscrowFactory,cctpBridgeEscrowFactory}`, `defaults.{asset,withdrawAsset}`. `profile` is kept for the home (`~/.zkmoney/config.json`); `config set` keeps every other key for the network in use (`~/.zkmoney/<network>/config.json`). Environment equivalents are `ZKMONEY_<KEY>` (`ZKMONEY_NODE_URL`, `ZKMONEY_L1_RPC`, …). `--home <dir>` moves everything.
 
 ## Reading the output
 
