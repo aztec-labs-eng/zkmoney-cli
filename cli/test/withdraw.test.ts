@@ -22,29 +22,25 @@ describe("predicateConfigFromEnv", () => {
   }
 
   it("arms screening from the three variables, with an optional base url", () => {
-    expect(predicateConfigFromEnv(full, "mainnet")).toEqual({
+    expect(predicateConfigFromEnv(full)).toEqual({
       verificationHash: "x-managed-policy-1",
       chain: "ethereum-mainnet",
       apiKey: "k",
     })
     expect(
-      predicateConfigFromEnv(
-        { ...full, ZKMONEY_PREDICATE_BASE_URL: "https://staging.api" },
-        "testnet",
-      )?.baseUrl,
+      predicateConfigFromEnv({ ...full, ZKMONEY_PREDICATE_BASE_URL: "https://staging.api" })
+        ?.baseUrl,
     ).toBe("https://staging.api")
   })
 
-  it("passes everything off mainnet when nothing is set, and refuses that on mainnet", () => {
-    expect(predicateConfigFromEnv({}, "sandbox")).toBeUndefined()
-    expect(predicateConfigFromEnv({}, "testnet")).toBeUndefined()
-    expect(() => predicateConfigFromEnv({}, "mainnet")).toThrow(/screened/)
+  it("screens nothing when nothing is set", () => {
+    expect(predicateConfigFromEnv({})).toBeUndefined()
   })
 
   it("refuses a partial setup anywhere", () => {
     const partial = { ZKMONEY_PREDICATE_VERIFICATION_HASH: "h" }
-    expect(() => predicateConfigFromEnv(partial, "sandbox")).toThrow(/half configured/)
-    expect(() => predicateConfigFromEnv(partial, "mainnet")).toThrow(CliError)
+    expect(() => predicateConfigFromEnv(partial)).toThrow(/half configured/)
+    expect(() => predicateConfigFromEnv(partial)).toThrow(CliError)
   })
 })
 

@@ -2,8 +2,8 @@
  * The L2->L1 exit: a ClaimFPC-sponsored burn to an Ethereum address, direct in DAI or through
  * oxide's SwapEscrow for USDC, USDT and ETH. The burn is all this process sends; oxide's relayer
  * finalizes it on L1, and the tracking service walks the record through its phases from chain
- * reads, on this run or a later one. On mainnet the recipient is screened first, as the relayer
- * screens it again at batching time: a blocked address there is a burn that never releases.
+ * reads, on this run or a later one. With screening configured, the recipient is screened first, as
+ * the relayer screens it again at batching time: a blocked address there is a burn that never releases.
  */
 import { EthAddress } from "@aztec/aztec.js/addresses"
 import { Fr } from "@aztec/aztec.js/fields"
@@ -51,7 +51,7 @@ import {
   type WithdrawalRecord,
   type WithdrawalWiring,
 } from "../frontCore.ts"
-import { amount as formatAmount, fail, shorten, when } from "../output.ts"
+import { amount as formatAmount, fail, note, shorten, when } from "../output.ts"
 import type { Runtime } from "./boot.ts"
 import { quoteFasterProof, type FasterProof } from "./fasterProof.ts"
 import { Records } from "./records.ts"
@@ -73,13 +73,11 @@ export function parseWithdrawAsset(text: string): WithdrawAsset {
 }
 
 /**
- * Predicate screening from the environment. Mainnet never runs unscreened, so a missing or
- * partial setup there is refused; elsewhere screening arms when the policy is set and passes
- * everything otherwise.
+ * Predicate screening from the environment: armed when the policy is set, off when none of it is.
+ * A partial setup is refused, as a mistake rather than a choice.
  */
 export function predicateConfigFromEnv(
   env: Record<string, string | undefined>,
-  network: string,
 ): PredicateScreeningConfig | undefined {
   const verificationHash = env.ZKMONEY_PREDICATE_VERIFICATION_HASH
   const chain = env.ZKMONEY_PREDICATE_CHAIN
@@ -89,14 +87,7 @@ export function predicateConfigFromEnv(
     !chain && "ZKMONEY_PREDICATE_CHAIN",
     !apiKey && "ZKMONEY_PREDICATE_API_KEY",
   ].filter((m): m is string => !!m)
-  if (missing.length === 3) {
-    if (network === "mainnet")
-      fail(
-        "mainnet withdrawals need the recipient screened, and no screening is configured",
-        "set ZKMONEY_PREDICATE_VERIFICATION_HASH, ZKMONEY_PREDICATE_CHAIN and ZKMONEY_PREDICATE_API_KEY to the policy oxide's relayer enforces",
-      )
-    return undefined
-  }
+  if (missing.length === 3) return undefined
   if (missing.length) fail(`screening is half configured: ${missing.join(", ")} missing`)
   return {
     verificationHash: verificationHash!,
@@ -107,8 +98,11 @@ export function predicateConfigFromEnv(
 }
 
 export function screenerFor(rt: Runtime): AddressScreener {
-  const config = predicateConfigFromEnv(process.env, rt.network)
-  return config ? new PredicateScreeningService(config) : passThroughScreener
+  const config = predicateConfigFromEnv(process.env)
+  if (config) return new PredicateScreeningService(config)
+  if (rt.network === "mainnet")
+    note("note: no ZKMONEY_PREDICATE_* is set, so the recipient is not screened before the burn")
+  return passThroughScreener
 }
 
 /** The oxide-rails coordinates a burn settles against; a manifest without them has no exit. */
