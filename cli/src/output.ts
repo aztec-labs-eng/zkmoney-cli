@@ -4,11 +4,11 @@ import { formatUnits } from "viem"
 export const shorten = (value: string, full = false): string =>
   full || value.length <= 14 ? value : `${value.slice(0, 6)}…${value.slice(-4)}`
 
-export function amount(atomic: bigint, decimals: number, symbol: string): string {
+export function amount(atomic: bigint, decimals: number, symbol: string, places = 2): string {
   const [whole, frac = ""] = formatUnits(atomic, decimals).split(".")
-  const cents = (frac + "00").slice(0, 2)
+  const shown = frac.padEnd(places, "0").slice(0, places)
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
-  return `${grouped}.${cents} ${symbol}`
+  return `${grouped}.${shown} ${symbol}`
 }
 
 export function signed(atomic: bigint, decimals: number, symbol: string): string {

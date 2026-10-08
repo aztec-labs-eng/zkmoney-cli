@@ -96,12 +96,13 @@ async function withRegistrationController(
   return isAllZeroHex(controller) ? tuple : { ...tuple, registrationController: controller }
 }
 
-export interface BootOptions extends Flags {
-  /** Skip the PXE and wallet: config, L1 and the manifest only. */
-  offline?: boolean
-}
+/** What a command that only reads gets: no PXE, no keystore, no store, so it cannot sign or write. */
+export type ReadOnlyRuntime = Pick<
+  Runtime,
+  "config" | "network" | "node" | "tuple" | "l1" | "l1Chain"
+>
 
-export async function boot(opts: BootOptions = {}): Promise<Runtime> {
+export async function bootReadOnly(opts: Flags = {}): Promise<ReadOnlyRuntime> {
   const config = await loadConfig(opts)
   const network = config.network as Network
   const l1Chain = l1ChainFor(config.l1ChainId)
@@ -120,8 +121,12 @@ export async function boot(opts: BootOptions = {}): Promise<Runtime> {
     ...(config.addressOverrides.registry ? { registry: config.addressOverrides.registry } : {}),
     ...(config.addressOverrides.token ? { token: config.addressOverrides.token } : {}),
   })
-
   const node = createNode(config.nodeUrl.value, config.nodeApiKey)
+  return { config, network, node, tuple, l1, l1Chain }
+}
+
+export async function boot(opts: Flags = {}): Promise<Runtime> {
+  const { config, network, node, tuple, l1, l1Chain } = await bootReadOnly(opts)
   const pxe = await createPXE(
     node,
     {

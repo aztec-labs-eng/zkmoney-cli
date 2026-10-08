@@ -125,7 +125,7 @@ export const tuplePortal = (tuple: OxideEnvTuple, field: keyof OxideEnvTuple): A
 const cuts = new Map<string, Promise<bigint>>()
 
 /** The portal's funding cut, an immutable read once per portal. */
-export function fpcFundingCut(rt: Runtime): Promise<bigint> {
+export function fpcFundingCut(rt: Pick<Runtime, "tuple" | "l1">): Promise<bigint> {
   const portal = tuplePortal(rt.tuple, "portal")
   let cut = cuts.get(portal.toLowerCase())
   if (!cut) {
