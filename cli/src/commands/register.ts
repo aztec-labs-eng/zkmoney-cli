@@ -7,12 +7,14 @@ import {
   resumeOxideRegistration,
   setLoggingEnabled,
   type PendingRegistrationRecord,
+  type RegistrationBroadcastPayload,
 } from "../frontCore.ts"
 import { amount, fail, print, note, shorten, time } from "../output.ts"
 import { boot, storagePath, type Runtime } from "../runtime/boot.ts"
 import { Records } from "../runtime/records.ts"
 import {
   L1_PRIVATE_KEY_ENV,
+  broadcastOwed,
   fundRegistration,
   latestRegistration,
   loadRegistrationTerms,
@@ -21,6 +23,7 @@ import {
   readRegistrationProgress,
   registrationContext,
   registrationKeysOf,
+  registrationPublisher,
   rememberRegistered,
   resumeDeps,
   startRegistration,
@@ -67,8 +70,8 @@ type Ensured =
       record: PendingRegistrationRecord
       resumed: boolean
       replayed: boolean
-      /** The deferred broadcast of a session started here; the caller runs it after printing. */
-      startBroadcast?: () => Promise<boolean>
+      /** The broadcast a session started here signed; the caller publishes it after printing. */
+      payload?: RegistrationBroadcastPayload
     }
 
 /**
@@ -106,7 +109,7 @@ async function ensureRegistration(
     note(`replacing the unfunded registration of @${live.tag}`)
     replaced = live
   }
-  let startBroadcast: (() => Promise<boolean>) | undefined
+  let payload: RegistrationBroadcastPayload | undefined
   let registered: string | undefined
   const { result, replayed } = await new Records(rt.storage).once<RegisterResult>(
     "register",
@@ -138,7 +141,7 @@ async function ensureRegistration(
           registered = result.oxideAccount
           return { tag, account: result.oxideAccount, sipaAddress: "" }
         case "awaiting_deposit":
-          startBroadcast = result.startBroadcast
+          if (result.broadcastOwed) payload = result.payload
           return { tag, account: result.oxideAccount, sipaAddress: result.sipaAddress }
       }
     },
@@ -150,7 +153,7 @@ async function ensureRegistration(
       `the record for @${tag} is missing from ${storagePath(rt.config)}`,
       `run \`zkmoney register ${tag}\` again without the idempotency key`,
     )
-  return { kind: "pending", record, resumed: false, replayed, startBroadcast }
+  return { kind: "pending", record, resumed: false, replayed, payload }
 }
 
 async function printDeposit(
@@ -288,23 +291,14 @@ export function registerCommand(): Command {
           )
         await printDeposit(rt, ctx, record, opts.full)
 
-        if (ensured.startBroadcast) {
+        const publish = registrationPublisher(rt, ctx, keys, ensured.payload)
+        if (broadcastOwed(record)) {
           stage(STAGE_LABELS.broadcast)
-          const landed = await ensured.startBroadcast()
           stage(
-            landed
+            (await publish(record))
               ? "relayers notified"
-              : "the broadcast did not land; the address stays valid and --wait or status retries it",
+              : "not published yet; the address stays valid and --wait keeps trying",
           )
-        } else if (!record.broadcast) {
-          // A resumed record the relayers never heard about: one forced tick re-signs and publishes it.
-          stage(STAGE_LABELS.broadcast)
-          await resumeOxideRegistration(await resumeDeps(rt, ctx, keys), {
-            force: true,
-            expectedRecord: { account: record.account, nameHash: record.nameHash },
-          })
-          const after = ctx.pending.get(record.account)
-          stage(after?.broadcast ? "relayers notified" : "not published yet; --wait keeps trying")
         }
         record = ctx.pending.get(record.account) ?? record
 
@@ -313,10 +307,11 @@ export function registerCommand(): Command {
         if (!opts.wait) return
         const timeoutMs = Math.max(1, Number(opts.timeout) || 60) * 60_000
         print(`\n${time(Date.now())}  waiting for the deposit and the sweep, Ctrl-C to stop`)
-        const outcome = await waitForRegistration(rt, ctx, keys, record, {
+        const outcome = await waitForRegistration(rt, ctx, record, {
           timeoutMs,
           intervalMs: 10_000,
           onLine: (line) => print(`${time(Date.now())}  ${line}`),
+          publish,
         })
         const final = ctx.pending.get(record.account) ?? record
         switch (outcome) {

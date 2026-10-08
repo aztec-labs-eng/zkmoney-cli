@@ -12,13 +12,16 @@ import { NO_FROM } from "@aztec/aztec.js/account"
 import { AztecAddress } from "@aztec/stdlib/aztec-address"
 import { TxHash } from "@aztec/stdlib/tx"
 import { erc20Abi, formatUnits, type Address, type Hex } from "viem"
+import type { LegacySipaDeployArgs } from "@oxide/l1-contracts/legacy_sipa.js"
 import { DEFAULT_CONTRACTS, quotedDepositFee } from "@obsidion/core/constants"
 import type { OxideEnvTuple } from "@obsidion/core/types"
 import {
   BroadcasterContract,
+  OxideSipaIntent,
   OxideTokenContract,
   SipaSelfResolver,
   TX_AMOUNT_CAP,
+  assertSubsidySweepsSipa,
   buildClaimSponsorPayload,
   buildClaimSubscribePayload,
   buildSipaSweepBroadcasts,
@@ -34,6 +37,7 @@ import {
   selfSipaNonce,
   type ClaimSponsorContext,
   type SelfResolvedSipa,
+  type SipaDeployArgs,
   type SipaFundingStatus,
   type SipaResolverOperatorRecord,
 } from "@obsidion/sdk"
@@ -299,9 +303,37 @@ async function usedSlotsToday(
 }
 
 /**
+ * Whether `sipa` already has code, so its sweep skips the deploy. Before a deploy, the subsidy is
+ * checked to deploy `sipa` itself: it derives the address from its own portal and factory, and a
+ * funded address it would not deploy is never swept. A legacy SIPA deploys from its own args.
+ */
+export async function sipaDeployed(
+  rt: Runtime,
+  params: {
+    sipa: Address
+    intent: OxideSipaIntent
+    deployArgs: SipaDeployArgs | LegacySipaDeployArgs
+    intentData: Hex
+  },
+): Promise<boolean> {
+  const { sipa, deployArgs } = params
+  const code = await rt.l1.getCode({ address: sipa })
+  if (code && code !== "0x") return true
+  if (!("recoveryAddress" in deployArgs))
+    await assertSubsidySweepsSipa(rt.l1, {
+      ...params,
+      deployArgs,
+      depositSubsidy: field(rt.tuple, "depositSubsidy") as Address,
+      portal: field(rt.tuple, "portal") as Address,
+      sipaFactory: field(rt.tuple, "sipaFactory") as Address,
+    })
+  return false
+}
+
+/**
  * The sponsored L2 tx that tells the relayer the address exists: the token's `SIPA` event to this
- * account and one deploy-and-sweep operation per accepted token through the Broadcaster. NO_FROM:
- * the rail's subscription is the eligibility, so no signature is asked of the account.
+ * account and one sweep operation per accepted token through the Broadcaster. NO_FROM: the rail's
+ * subscription is the eligibility, so no signature is asked of the account.
  */
 async function broadcast(
   rt: Runtime,
@@ -313,6 +345,12 @@ async function broadcast(
 ): Promise<string> {
   const tuple = rt.tuple
   const { user, sipaAddress, sipaArgs, intent, resolution } = derived
+  const deployed = await sipaDeployed(rt, {
+    sipa: sipaAddress,
+    intent: OxideSipaIntent.Deposit,
+    deployArgs: sipaArgs,
+    intentData: intent.intentData,
+  })
   const l2Token = AztecAddress.fromStringUnsafe(field(tuple, "l2Token"))
   const tokenArtifact = await rt.contractService.getArtifactForContract(
     DEFAULT_CONTRACTS.oxideToken,
@@ -331,7 +369,9 @@ async function broadcast(
     resweepable: sipaArgs.resweepable,
     intentHash: intent.intentHash,
     sipa: sipaAddress,
+    deployed,
     sipaFactory: field(tuple, "sipaFactory") as Address,
+    intent: OxideSipaIntent.Deposit,
     deployArgs: sipaArgs,
     intentData: intent.intentData,
     proofs: intent.proofs,

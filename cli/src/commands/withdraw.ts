@@ -3,6 +3,7 @@ import { DEFAULT_DECIMALS } from "@obsidion/core/constants"
 import { WithdrawalStorage, withdrawalAmounts } from "../frontCore.ts"
 import { amount, fail, fields, note, print, shorten, table, time, when } from "../output.ts"
 import { boot, type Runtime } from "../runtime/boot.ts"
+import { fasterEta } from "../runtime/fasterProof.ts"
 import {
   WITHDRAW_ASSETS,
   findWithdrawal,
@@ -44,6 +45,7 @@ export function withdrawCommand(): Command {
     .requiredOption("--to <recipient>", "an Ethereum address or a saved Ethereum contact's name")
     .option("--asset <asset>", `what arrives: ${WITHDRAW_ASSETS.join(", ")} (default from config)`)
     .option("--idempotency-key <key>", "a retry with the same key returns the same withdrawal")
+    .option("--faster", "pay a DAI prover tip so the proof comes before its epoch ends (DAI only)")
     .option("--wait", "follow the withdrawal until the funds land on Ethereum")
     .option("--interval <seconds>", "seconds between checks while waiting", "20")
     .option("--full", "print full addresses and hashes")
@@ -54,6 +56,7 @@ export function withdrawCommand(): Command {
           to: string
           asset?: string
           idempotencyKey?: string
+          faster?: boolean
           wait?: boolean
           interval: string
           full?: boolean
@@ -61,9 +64,15 @@ export function withdrawCommand(): Command {
         cmd: Command,
       ) => {
         await withRuntime(cmd, async (rt) => {
-          const { id, handle, record, replayed } = await withdraw(
+          const { id, handle, record, replayed, faster } = await withdraw(
             rt,
-            { amount: amountText, to: opts.to, asset: opts.asset, key: opts.idempotencyKey },
+            {
+              amount: amountText,
+              to: opts.to,
+              asset: opts.asset,
+              key: opts.idempotencyKey,
+              faster: opts.faster,
+            },
             (stage) => note(STAGE_LINE[stage]),
           )
           print(
@@ -71,6 +80,7 @@ export function withdrawCommand(): Command {
               ["Withdrawal", id],
               ["Status", replayed ? "already sent under this key" : handle.outcome],
               ...withdrawalSummary(record, { full: opts.full }),
+              ["Proof", faster ? fasterEta(faster) : undefined],
             ]),
           )
           if (!opts.wait || isTerminal(record)) {

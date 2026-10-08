@@ -53,6 +53,7 @@ import {
 } from "../frontCore.ts"
 import { amount as formatAmount, fail, shorten, when } from "../output.ts"
 import type { Runtime } from "./boot.ts"
+import { quoteFasterProof, type FasterProof } from "./fasterProof.ts"
 import { Records } from "./records.ts"
 import { activateNetwork, parseSendAmount, refuseInterrupted, sponsorOrFail } from "./send.ts"
 import { keysOf, noteSubscribed } from "./sponsor.ts"
@@ -121,7 +122,7 @@ export function currentDeployment(rt: Runtime): WithdrawalDeployment {
   return { portal: withdrawalWiring(rt).portal, l2Token: rt.tuple.l2Token }
 }
 
-const tuplePortal = (tuple: OxideEnvTuple, field: keyof OxideEnvTuple): Address => {
+export const tuplePortal = (tuple: OxideEnvTuple, field: keyof OxideEnvTuple): Address => {
   const value = tuple[field]
   if (typeof value !== "string" || !value) fail(`oxide manifest lacks ${field}`)
   return value as Address
@@ -370,7 +371,7 @@ export interface BurnResult {
  * watcher. A burn that may still land is returned unmined for the tracker; one that never went out
  * fails its record and rethrows.
  */
-async function runBurn(
+export async function runBurn(
   rt: Runtime,
   input: {
     operationId: string
@@ -425,6 +426,8 @@ export interface WithdrawInput {
   to: string
   asset?: string
   key?: string
+  /** Pay a prover tip for an early proof; DAI withdrawals only. */
+  faster?: boolean
 }
 
 export interface WithdrawalHandle {
@@ -442,7 +445,13 @@ export async function withdraw(
   rt: Runtime,
   input: WithdrawInput,
   onStage: (stage: WithdrawStage) => void,
-): Promise<{ id: string; handle: WithdrawalHandle; record: WithdrawalRecord; replayed: boolean }> {
+): Promise<{
+  id: string
+  handle: WithdrawalHandle
+  record: WithdrawalRecord
+  replayed: boolean
+  faster?: FasterProof
+}> {
   const id = input.key ?? newWithdrawalId()
   const records = new Records(rt.storage)
   await refuseInterrupted(
@@ -454,6 +463,8 @@ export async function withdraw(
   onStage("building")
   await activateNetwork(rt)
   const asset = parseWithdrawAsset(input.asset ?? rt.config.defaults.withdrawAsset)
+  if (input.faster && asset !== "DAI")
+    fail("only a DAI withdrawal can buy an early proof", "drop --asset or --faster")
   const tokenService = await rt.tokenService()
   const token = await tokenService.fetchTokenInformation()
   const amount = parseSendAmount(input.amount, token.decimals)
@@ -481,10 +492,12 @@ export async function withdraw(
     )
   if (!verdict.compliant) fail(verdict.reason?.message ?? "this address cannot receive withdrawals")
   const quote = await quoteWithdrawal(rt, asset, amount.atomic, recipient.address)
-  if (amount.atomic <= quote.fee.floorAtomic)
+  const faster = input.faster ? await quoteFasterProof(rt) : undefined
+  const proverTip = faster?.proverTip ?? 0n
+  if (amount.atomic <= quote.fee.floorAtomic + proverTip)
     fail(
       `the amount does not cover the fee of ${formatAmount(
-        quote.fee.floorAtomic,
+        quote.fee.floorAtomic + proverTip,
         token.decimals,
         token.symbol,
       )}`,
@@ -517,6 +530,7 @@ export async function withdraw(
         amount: formatUnits(amount.atomic, token.decimals),
         rawAmount: amount.atomic.toString(),
         relayerTip: WITHDRAW_RELAYER_TIP.toString(),
+        proverTip: proverTip.toString(),
         fpcFundingCut: quote.fee.fpcFundingCut.toString(),
         tokenSymbol: token.symbol,
         phase: "submitting",
@@ -530,6 +544,7 @@ export async function withdraw(
           operationId,
           userAccount: account,
           useRawAmount: true,
+          proverTip,
           withdrawal: exit.withdrawal,
         })
       },
@@ -546,7 +561,7 @@ export async function withdraw(
   await store.load()
   const record = store.get(handle.result.localId)
   if (!record) fail("the withdrawal record vanished after the burn")
-  return { id, handle: handle.result, record, replayed: handle.replayed }
+  return { id, handle: handle.result, record, replayed: handle.replayed, faster }
 }
 
 /** A record by its idempotency key, its local id or its L2 tx hash. */
@@ -572,7 +587,7 @@ export const isTerminal = (record: WithdrawalRecord) => WITHDRAWAL_TERMINAL_PHAS
 export function phaseLabel(record: WithdrawalRecord, now = Date.now()): string {
   const copy = WITHDRAWAL_PHASE_COPY[record.phase]
   const status =
-    record.phase === "submitting" && !record.l2TxHash ? (copy.live ?? copy.status) : copy.status
+    record.phase === "submitting" && !record.l2TxHash ? (copy.proving ?? copy.status) : copy.status
   return isWithdrawalDelayed(record, now) ? `${status} (taking longer than usual)` : status
 }
 

@@ -4,9 +4,13 @@
  * without a wallet.
  */
 import { REGISTRATION_ASK_DEPOSIT_TOTAL, registrationFloor } from "@obsidion/core/constants"
-import type { RegistrationKind, RegistrationSchedule } from "@obsidion/core/types"
+import type {
+  NameClaimResponse,
+  NameHold,
+  RegistrationKind,
+  RegistrationSchedule,
+} from "@obsidion/core/types"
 import {
-  type NameClaimResponse,
   type PendingRegistrationPhase,
   type PendingRegistrationRecord,
   type SipaFundingToken,
@@ -14,8 +18,8 @@ import {
 import { amount, fields, shorten, when } from "../output.ts"
 import { feeScale } from "./depositFacts.ts"
 
-/** The sign response as the account service sends it: the claim plus the reservation hold. */
-export type SignedClaim = NameClaimResponse & { hold?: { deadline: string } }
+/** The sign response with its reservation hold optional, so a response without one still reads. */
+export type SignedClaim = Omit<NameClaimResponse, "hold"> & { hold?: NameHold }
 
 /** When the reservation hold ends, unix seconds; undefined when the response carried no hold. */
 export function holdDeadline(claim: Pick<SignedClaim, "hold">): number | undefined {

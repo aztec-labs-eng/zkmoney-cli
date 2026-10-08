@@ -28,7 +28,7 @@ import {
   registrationFloor,
 } from "@obsidion/core/constants"
 import { isAllZeroHex } from "@obsidion/core/oxide"
-import type { RegistrationSchedule } from "@obsidion/core/types"
+import type { NameClaimResponse, RegistrationSchedule } from "@obsidion/core/types"
 import {
   AccountServiceClient,
   PendingRegistrationStore,
@@ -41,8 +41,11 @@ import {
   isTerminalRegistrationPhase,
   matchWireNameHash,
   pubkeyToR1KeyArg,
+  rebuildRegistrationBroadcast,
+  recordRegistrationBroadcastSent,
   registrationSipaImplementation,
   resumeOxideRegistration,
+  retryDelay,
   setActiveNetworkId,
   startOxideRegistrationSession,
   toWebAuthnAuthArg,
@@ -57,6 +60,7 @@ import {
   type OxideSessionResult,
   type OxideSignDeps,
   type PendingRegistrationRecord,
+  type RegistrationBroadcastPayload,
   type RegistrationBroadcaster,
   type RegistrationSipaSeed,
   type SipaFundingToken,
@@ -64,6 +68,7 @@ import {
 import {
   BroadcasterContract,
   Network,
+  OxideSipaIntent,
   OxideTokenContract,
   buildClaimSponsorPayload,
   buildClaimSubscribePayload,
@@ -102,9 +107,10 @@ import {
   type TokenBalance,
 } from "./registrationQuote.ts"
 import { sipaFundingTokens } from "./depositFacts.ts"
+import { sipaDeployed } from "./deposits.ts"
 import { providerFor } from "../keystore/authenticator.ts"
 import { readAccountFile, rememberIdentity } from "../keystore/keystore.ts"
-import { fail, note, time } from "../output.ts"
+import { CliError, fail, note, time } from "../output.ts"
 
 function need(value: string | undefined, field: string): string {
   if (!value || isAllZeroHex(value)) fail(`oxide manifest lacks ${field}`)
@@ -327,10 +333,10 @@ async function broadcasterContract(rt: Runtime): Promise<BroadcasterContract> {
 
 /**
  * Publishes the registration SIPA to relayers: the token's `SIPA` event to this account plus one
- * deploy-and-sweep operation per funding token, in one batch on the one-shot
- * `registration-broadcast` rail. The batch subscribes against the NameClaim and pays for itself, so
- * the fresh claim is cached first: the subscribe leg cannot recover it from a registry that has not
- * logged it yet. Throws on failure; the machine keeps the deposit address and re-broadcasts later.
+ * sweep operation per funding token, in one batch on the one-shot `registration-broadcast` rail.
+ * The batch subscribes against the NameClaim and pays for itself, so the fresh claim is cached
+ * first: the subscribe leg cannot recover it from a registry that has not logged it yet. Resolves
+ * with the tx hash once mined; throws on failure.
  */
 export function registrationBroadcaster(
   rt: Runtime,
@@ -338,9 +344,15 @@ export function registrationBroadcaster(
   keys: Keys,
   tag: string,
 ): RegistrationBroadcaster {
-  return async (payload) => {
+  return async (payload, attempt = {}) => {
     const tuple = rt.tuple
     const address = keys.account.getAddress()
+    const deployed = await sipaDeployed(rt, {
+      sipa: payload.sipaAddress,
+      intent: OxideSipaIntent.Registration,
+      deployArgs: payload.sipaArgs,
+      intentData: payload.registrationData,
+    })
     await nameClaims(rt).put({
       address: address.toString(),
       handle: tag,
@@ -369,7 +381,9 @@ export function registrationBroadcaster(
       resweepable: payload.sipaArgs.resweepable,
       intentHash: payload.sipaArgs.intentHash,
       sipa: payload.sipaAddress,
+      deployed,
       sipaFactory: need(tuple.sipaFactory, "sipaFactory") as Address,
+      intent: OxideSipaIntent.Registration,
       deployArgs: payload.sipaArgs,
       intentData: payload.registrationData,
       proofs: ("recoveryAddress" in payload.sipaArgs
@@ -402,13 +416,15 @@ export function registrationBroadcaster(
       ? await buildClaimSubscribePayload({ ...common, gate: subscribe.gate })
       : await buildClaimSponsorPayload(common)
     // NO_FROM: the entrypoint's subscription is the eligibility, not a signature over the broadcast.
-    await rt.wallet.sendTx(txPayload, {
+    const { receipt } = await rt.wallet.sendTx(txPayload, {
+      ...attempt,
       from: NO_FROM,
       sendMessagesAs: address,
       additionalScopes: [address],
       fee: claimFpcSponsoredFee(policy, innerCalls),
     })
     noteSubscribed(keys.account, sponsor)
+    return receipt.txHash.toString()
   }
 }
 
@@ -472,7 +488,7 @@ async function registrationBroadcastSeen(
 function localTagResolver(rt: Runtime, ctx: RegistrationContext) {
   return async (nameHash: Hex): Promise<string | null> => {
     const known = [
-      readAccountFile(rt.config.home, rt.config.network)?.identity?.tag,
+      readAccountFile(rt.config.home, rt.config.dir)?.identity?.tag,
       ...ctx.pending.list().map((r) => r.tag),
     ]
     for (const tag of known) {
@@ -487,7 +503,6 @@ async function signDepsFor(
   rt: Runtime,
   ctx: RegistrationContext,
   keys: RegistrationKeys,
-  tag: string,
 ): Promise<OxideSignDeps> {
   const accountService = accountServiceFor(rt, keys)
   accountService.signDomain = reportingFailure(
@@ -507,10 +522,6 @@ async function signDepsFor(
       tuple: rt.tuple,
       network: rt.network,
     }),
-    broadcast: reportingFailure(
-      "the broadcast failed",
-      registrationBroadcaster(rt, ctx, keys, tag),
-    ),
     seedSipaDeposit: depositSeeder(rt, ctx.env),
   }
 }
@@ -529,7 +540,10 @@ export interface StartedRegistration {
   claim?: SignedClaim
 }
 
-/** Prechecks the name, signs the claim, derives the deposit address and checkpoints the record. */
+/**
+ * Prechecks the name, signs the claim, derives the deposit address and checkpoints the record. The
+ * caller publishes the broadcast payload the result carries.
+ */
 export async function startRegistration(
   rt: Runtime,
   ctx: RegistrationContext,
@@ -538,8 +552,8 @@ export async function startRegistration(
   opts: StartOptions = {},
 ): Promise<StartedRegistration> {
   const accountService = accountServiceFor(rt, keys)
-  const sign = await signDepsFor(rt, ctx, keys, tag)
-  let claim: SignedClaim | undefined
+  const sign = await signDepsFor(rt, ctx, keys)
+  let claim: NameClaimResponse | undefined
   const deps: OxideRegistrationSessionDeps = {
     tag,
     env: ctx.env,
@@ -561,11 +575,8 @@ export async function startRegistration(
     seedSipaDeposit: sign.seedSipaDeposit,
     l1: ctx.l1,
     deriveRegistrationSipa: sign.deriveRegistrationSipa,
-    broadcast: sign.broadcast,
     pendingStore: ctx.pending,
     resolveLocalTag: localTagResolver(rt, ctx),
-    // The address is printed first; the proof runs after it.
-    deferBroadcast: true,
     onStage: opts.onStage,
     onCheckpoint: async (record) => {
       if (claim) await saveRegistrationTerms(rt, termsFromClaim(record.account, tag, claim))
@@ -587,11 +598,7 @@ export async function startRegistration(
 
 // ── Resume: detection ticks, funding reads ─────────────────────────────────────
 
-/**
- * The resume machine's collaborators. With `keys` a tick can re-sign and re-broadcast a record the
- * relayers never heard about; without them it only observes.
- */
-/** front-core's resume tick backs off silently on a throw; say why before it does. */
+/** front-core's rebuild reads a failed claim request as a wait; say why first. */
 function reportingFailure<A extends unknown[], R>(what: string, fn: (...args: A) => Promise<R>) {
   return async (...args: A): Promise<R> => {
     try {
@@ -603,11 +610,8 @@ function reportingFailure<A extends unknown[], R>(what: string, fn: (...args: A)
   }
 }
 
-export async function resumeDeps(
-  rt: Runtime,
-  ctx: RegistrationContext,
-  keys?: RegistrationKeys,
-): Promise<OxideResumeDeps> {
+/** The resume machine's collaborators. A tick only observes; the register command publishes. */
+export async function resumeDeps(rt: Runtime, ctx: RegistrationContext): Promise<OxideResumeDeps> {
   // `termsFor` is synchronous, so the stored terms are read up front for every record.
   const terms = new Map<string, RegistrationTerms>()
   for (const record of ctx.pending.list()) {
@@ -623,6 +627,7 @@ export async function resumeDeps(
       registry: ctx.env.registry,
       portal: ctx.portal,
       registrationController: ctx.scheduleSource,
+      fundingTokens: ctx.fundingTokens,
       termsFor: (account) => {
         const stored = terms.get(account.toLowerCase())
         const record = ctx.pending.get(account)
@@ -634,25 +639,87 @@ export async function resumeDeps(
     }),
     pendingStore: ctx.pending,
     resolveLocalTag: localTagResolver(rt, ctx),
-    // The event read needs the account in the PXE, which only an unlocked runtime registers.
-    ...(keys
-      ? {
-          broadcastSeen: (record) => registrationBroadcastSeen(rt, record),
-          // front-core reads a throw here as "blocked" and backs off, so say why before it does.
-          getSignDeps: async (record) => {
-            if (
-              record.l2Address.toLowerCase() !== keys.account.getAddress().toString().toLowerCase()
+  }
+}
+
+// ── Publishing: owed by the register command once it has shown the address ──────
+
+/** A payload whose claim or signed terms lapse sooner than this is signed again, not sent. */
+const PAYLOAD_MARGIN_MS = 30_000
+
+/** When the sweep stops accepting the payload: its claim's deadline, or its signed terms' if sooner. */
+function payloadDeadlineMs(payload: RegistrationBroadcastPayload): number {
+  const claim = payload.domainAuth.deadline
+  const terms = payload.signedTerms.deadline
+  return Number(terms > 0n && terms < claim ? terms : claim) * 1000
+}
+
+/** Whether the address still needs its broadcast. A spent rail leaves only a manual sweep. */
+export const broadcastOwed = (record: PendingRegistrationRecord): boolean =>
+  !isTerminalRegistrationPhase(record.phase) &&
+  !record.broadcast &&
+  record.replaced?.broadcastSpent !== true
+
+/** An attempt at publishing the record's address, when one is due; true once relayers can see it. */
+export type RegistrationPublisher = (record: PendingRegistrationRecord) => Promise<boolean>
+
+/**
+ * Publishes a record's address as the web wallet's broadcast ledger does: the chain is asked first,
+ * so a broadcast that already landed costs a read, not a proof; then `payload`, the session's own,
+ * while its claim is live, else a rebuild that re-requests the claim and re-signs the consent. An
+ * attempt that does not land backs the next one off; a rebuild that ends the registration fails.
+ */
+export function registrationPublisher(
+  rt: Runtime,
+  ctx: RegistrationContext,
+  keys: RegistrationKeys,
+  payload?: RegistrationBroadcastPayload,
+): RegistrationPublisher {
+  let failures = 0
+  let dueAt = 0
+  return async (record) => {
+    if (!broadcastOwed(record)) return record.broadcast
+    if (Date.now() < dueAt) return false
+    try {
+      if (!(await registrationBroadcastSeen(rt, record).catch(() => false))) {
+        let signed =
+          payload?.sipaAddress.toLowerCase() === record.sipaAddress.toLowerCase() &&
+          payloadDeadlineMs(payload) > Date.now() + PAYLOAD_MARGIN_MS
+            ? payload
+            : undefined
+        if (!signed) {
+          const rebuilt = await rebuildRegistrationBroadcast(
+            await resumeDeps(rt, ctx),
+            record,
+            await signDepsFor(rt, ctx, keys),
+          )
+          if (rebuilt.kind === "closed")
+            fail(
+              rebuilt.outcome === "taken"
+                ? `@${record.tag} went to another account before its address was published`
+                : "the registration cannot go on from this record",
+              rebuilt.outcome === "taken"
+                ? "pick another tag"
+                : `run \`zkmoney register status\`, then \`zkmoney register ${record.tag}\` again`,
             )
-              return null
-            try {
-              return await signDepsFor(rt, ctx, keys, record.tag)
-            } catch (err) {
-              note(`note: cannot re-sign the registration: ${(err as Error).message}`)
-              throw err
-            }
-          },
+          if (rebuilt.kind === "spent") return false
+          if (rebuilt.kind === "wait") {
+            note(`note: not published yet: ${rebuilt.reason.toLowerCase()}`)
+            dueAt = Date.now() + rebuilt.ms
+            return false
+          }
+          signed = rebuilt.payload
         }
-      : {}),
+        await registrationBroadcaster(rt, ctx, keys, record.tag)(signed)
+      }
+      await recordRegistrationBroadcastSent(ctx.pending, record.account, record.sipaAddress)
+      return true
+    } catch (err) {
+      if (err instanceof CliError) throw err
+      note(`note: the broadcast failed: ${(err as Error).message}`)
+      dueAt = Date.now() + retryDelay(++failures)
+      return false
+    }
   }
 }
 
@@ -720,21 +787,21 @@ export interface WaitOptions {
   intervalMs: number
   /** One progress line, without its timestamp. */
   onLine: (line: string) => void
+  publish: RegistrationPublisher
 }
 
 /**
  * Ticks the record until the registry names the account, the name is lost, or `timeoutMs` passes.
- * Each tick re-broadcasts when the relayers never heard about the SIPA, and every change in what
- * the address holds or in the record's phase is reported once.
+ * Until the relayers have heard about the address, a tick publishes it when an attempt is due, and
+ * every change in what the address holds or in the record's phase is reported once.
  */
 export async function waitForRegistration(
   rt: Runtime,
   ctx: RegistrationContext,
-  keys: RegistrationKeys,
   record: PendingRegistrationRecord,
   opts: WaitOptions,
 ): Promise<WaitOutcome> {
-  const deps = await resumeDeps(rt, ctx, keys)
+  const deps = await resumeDeps(rt, ctx)
   const deadline = Date.now() + opts.timeoutMs
   const expected = { account: record.account, nameHash: record.nameHash }
   let lastFunding: string | undefined
@@ -743,6 +810,7 @@ export async function waitForRegistration(
   let lastSwept = record.sweptAt !== undefined
   for (;;) {
     const outcome = await resumeOxideRegistration(deps, { expectedRecord: expected })
+    await opts.publish(ctx.pending.get(record.account) ?? record)
     const current = ctx.pending.get(record.account) ?? record
     if (current.broadcast !== lastBroadcast) {
       lastBroadcast = current.broadcast
@@ -765,7 +833,9 @@ export async function waitForRegistration(
     }
     if (current.phase !== lastPhase) {
       lastPhase = current.phase
-      if (!isTerminalRegistrationPhase(current.phase)) opts.onLine(phaseLabel(current.phase))
+      // The tick that finds a sweep also stamps the record funded, which the sweep line supersedes.
+      if (!isTerminalRegistrationPhase(current.phase) && current.sweptAt === undefined)
+        opts.onLine(phaseLabel(current.phase))
     }
     if (outcome === "confirmed" || outcome === "taken" || outcome === "failed") return outcome
     if (outcome === "needs_recovery") return outcome

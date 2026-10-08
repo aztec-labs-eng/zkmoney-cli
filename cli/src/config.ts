@@ -20,11 +20,15 @@ import type { ContractServiceConfig, OxideEnvProfile } from "@obsidion/core/type
 
 const STAGING = "https://cdn.staging.zk.money/profiles/v5/current.json"
 
-/** The profiles the CLI knows by name, and the network each runs on. `testnet` is staging's other name. */
-export const PROFILES: Record<string, { url: string; network: string }> = {
+/**
+ * The profiles the CLI knows by name, the network each runs on, and with `dir` a directory of its own when it shares
+ * its network with another profile. `testnet` is staging's other name; dev runs on staging's network.
+ */
+export const PROFILES: Record<string, { url: string; network: string; dir?: string }> = {
   mainnet: { url: "https://cdn.zk.money/profiles/v5/current.json", network: "mainnet" },
   staging: { url: STAGING, network: "testnet" },
   testnet: { url: STAGING, network: "testnet" },
+  dev: { url: "https://cdn.dev.zk.money/profiles/v5/current.json", network: "testnet", dir: "dev" },
   sandbox: { url: "http://localhost:8083/profiles/sandbox.json", network: "sandbox" },
 }
 
@@ -42,6 +46,8 @@ export const settingsSchema = z
         portal: z.string().optional(),
         token: z.string().optional(),
         claimFpc: z.string().optional(),
+        sUSDSPortal: z.string().optional(),
+        skyEscrowFactory: z.string().optional(),
       })
       .optional(),
     defaults: z
@@ -65,6 +71,8 @@ export const SETTING_KEYS = [
   "addresses.portal",
   "addresses.token",
   "addresses.claimFpc",
+  "addresses.sUSDSPortal",
+  "addresses.skyEscrowFactory",
   "defaults.asset",
   "defaults.withdrawAsset",
 ] as const
@@ -81,6 +89,8 @@ const ENV_BY_KEY: Record<SettingKey, string> = {
   "addresses.portal": "ZKMONEY_PORTAL",
   "addresses.token": "ZKMONEY_TOKEN",
   "addresses.claimFpc": "ZKMONEY_CLAIM_FPC",
+  "addresses.sUSDSPortal": "ZKMONEY_SUSDS_PORTAL",
+  "addresses.skyEscrowFactory": "ZKMONEY_SKY_ESCROW_FACTORY",
   "defaults.asset": "ZKMONEY_ASSET",
   "defaults.withdrawAsset": "ZKMONEY_WITHDRAW_ASSET",
 }
@@ -94,9 +104,9 @@ export function defaultHome(): string {
   return join(home, ".zkmoney")
 }
 
-/** The home's settings file, or with `network` that network's own. */
-export const settingsPath = (home: string, network?: string) =>
-  network ? join(home, network, "config.json") : join(home, "config.json")
+/** The home's settings file, or with `dir` that profile directory's own. */
+export const settingsPath = (home: string, dir?: string) =>
+  dir ? join(home, dir, "config.json") : join(home, "config.json")
 
 export function readSettingsFile(path: string): Settings {
   if (!existsSync(path)) return {}
@@ -121,12 +131,15 @@ export function profileOf(home: string, flag?: string): string {
   )
 }
 
-/** The network a profile runs on, which names the directory holding its account and settings. */
+/** The network a profile runs on. */
 export const networkOf = (profile: string) => PROFILES[profile]?.network ?? profile
 
-/** A network's settings over the home's, which apply to every network. */
-export function readSettings(home: string, network: string): Settings {
-  const own = readSettingsFile(settingsPath(home, network))
+/** The directory under the home holding a profile's account, store and settings. */
+export const dirOf = (profile: string) => PROFILES[profile]?.dir ?? networkOf(profile)
+
+/** A profile directory's settings over the home's, which apply to every profile. */
+export function readSettings(home: string, dir: string): Settings {
+  const own = readSettingsFile(settingsPath(home, dir))
   let merged = readSettingsFile(settingsPath(home))
   for (const key of SETTING_KEYS) {
     const value = getSetting(own, key)
@@ -181,6 +194,8 @@ export interface Flags {
 export interface CliConfig {
   home: string
   network: string
+  /** Where under `home` this profile's account, store and settings live. */
+  dir: string
   profileId: string
   /** The profile version in force, and the pin of its reviewed contract artifacts. */
   versionId: string
@@ -194,10 +209,23 @@ export interface CliConfig {
   snapshot: ContractServiceConfig
   oxide: OxideEnvProfile
   claimFpcAddress: Resolved<string | undefined>
+  /** The profile's assets by token symbol, each a deployment found by its portal in its manifest. */
+  assets: Record<string, Resolved<AssetPin>>
+  /**
+   * Runs moves between DAI and sUSDS. A setting overrides the manifest's; the profile's stands in
+   * for a manifest without one.
+   */
+  skyEscrowFactory: Resolved<string | undefined>
   addressOverrides: { registry?: string; portal?: string; token?: string }
   defaults: { asset: string; withdrawAsset: string }
   settings: Settings
   profile: ConfigProfile
+}
+
+/** An asset's deployment in the oxide manifest. */
+export interface AssetPin {
+  portal: string
+  expectedGitSha?: string
 }
 
 function pick(
@@ -221,7 +249,8 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
   const home = flags.home ?? defaultHome()
   const profileName = profileOf(home, flags.profile)
   const network = networkOf(profileName)
-  const settings = readSettings(home, network)
+  const dir = dirOf(profileName)
+  const settings = readSettings(home, dir)
   const profileUrl =
     pick("profileUrl", flags.profileUrl, settings) ??
     (PROFILES[profileName]
@@ -257,9 +286,25 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
     value: snapshot.contracts.claimFpc?.address,
     source: "profile",
   }
+  const assets: Record<string, Resolved<AssetPin>> = {}
+  for (const { symbol, ...pin } of version.assets ?? [])
+    assets[symbol] = { value: pin, source: "profile" }
+  const sUSDSPortal = pick("addresses.sUSDSPortal", undefined, settings)
+  if (sUSDSPortal)
+    assets.sUSDS = { value: { portal: sUSDSPortal.value }, source: sUSDSPortal.source }
+  const factoryEntry = version.contracts.skyEscrowFactory
+  const skyEscrowFactory: Resolved<string | undefined> = pick(
+    "addresses.skyEscrowFactory",
+    undefined,
+    settings,
+  ) ?? {
+    value: factoryEntry && "address" in factoryEntry ? factoryEntry.address : undefined,
+    source: "profile",
+  }
   return {
     home,
     network,
+    dir,
     profileId: profile.profileId,
     versionId: resolvedVersionId,
     artifactManifestSha256: version.artifactManifestSha256,
@@ -272,6 +317,8 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
     snapshot,
     oxide: version.oxide,
     claimFpcAddress,
+    assets,
+    skyEscrowFactory,
     addressOverrides: {
       registry: pick("addresses.registry", undefined, settings)?.value,
       portal: pick("addresses.portal", undefined, settings)?.value,
