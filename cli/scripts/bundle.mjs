@@ -24,8 +24,10 @@ import { build } from "esbuild"
 
 const pkgDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repoRoot = resolve(pkgDir, "..")
-// zkmoney-public, where scripts/setup.sh joined the CLI to the pnpm workspace.
-const workspace = join(repoRoot, ".public/zkmoney-public")
+// Where scripts/setup.sh joined the CLI to a pnpm workspace: zkmoney-public, or ZKMONEY_WALLET_DIR's wallet checkout.
+const workspace = process.env.ZKMONEY_WALLET_DIR
+  ? resolve(process.env.ZKMONEY_WALLET_DIR)
+  : join(repoRoot, ".public/zkmoney-public")
 const version = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version
 const outRoot = resolve(process.argv[2] ?? join(pkgDir, "release"))
 const name = `zkmoney-cli-${version}`
