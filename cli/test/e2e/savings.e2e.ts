@@ -11,11 +11,11 @@
 import { formatUnits, parseUnits } from "viem"
 import { afterAll, beforeAll, expect, it } from "vitest"
 import { boot, type Runtime } from "../../src/runtime/boot.ts"
+import { recoveryAccountOf } from "../../src/runtime/escrow.ts"
 import { quoteFasterProof } from "../../src/runtime/fasterProof.ts"
 import {
   moveThroughSky,
   readSavings,
-  recoveryAccountOf,
   savingsRuntime,
   settleMoves,
   sharesFor,

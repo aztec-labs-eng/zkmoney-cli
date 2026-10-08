@@ -2,6 +2,7 @@ import { createRequire } from "node:module"
 import { Command } from "commander"
 import { accountCommand } from "./commands/account.ts"
 import { balanceCommand, txsCommand, watchCommand } from "./commands/activity.ts"
+import { bridgeCommand, bridgesCommand } from "./commands/bridge.ts"
 import { configCommand } from "./commands/config.ts"
 import { depositsCommand } from "./commands/deposits.ts"
 import { registerCommand } from "./commands/register.ts"
@@ -24,7 +25,7 @@ process.stdout.on("error", (err: NodeJS.ErrnoException) => {
 })
 
 const program = new Command("zkmoney")
-  .description("zk.money from the terminal: register a tag, receive, pay, withdraw")
+  .description("zk.money from the terminal: register a tag, receive, pay, withdraw, bridge")
   .version(createRequire(import.meta.url)("../package.json").version)
   .option("--home <dir>", "where the account, settings and store live (default ~/.zkmoney)")
   .option("--profile <name>", "mainnet, staging (also: testnet), dev or sandbox (default mainnet)")
@@ -41,6 +42,8 @@ const program = new Command("zkmoney")
   .addCommand(paymentsCommand())
   .addCommand(withdrawCommand())
   .addCommand(withdrawalsCommand())
+  .addCommand(bridgeCommand())
+  .addCommand(bridgesCommand())
   .addCommand(savingsCommand())
   .addCommand(paylinkCommand())
   .addCommand(contactsCommand())

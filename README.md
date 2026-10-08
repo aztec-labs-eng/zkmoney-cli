@@ -3,7 +3,7 @@
 > [!WARNING]
 > Experimental. The zkmoney CLI is early software that moves real funds on mainnet. Use it at your own risk, with amounts you can afford to lose.
 
-zk.money from the terminal: register a tag, receive deposits from Ethereum, pay tags, withdraw, make and claim paylinks, and watch the balance. It runs against Ethereum and Aztec mainnet by default and prints plain text, for people at a shell and for agents that run one.
+zk.money from the terminal: register a tag, receive deposits from Ethereum, pay tags, withdraw to Ethereum or bridge to other chains, make and claim paylinks, and watch the balance. It runs against Ethereum and Aztec mainnet by default and prints plain text, for people at a shell and for agents that run one.
 
 This repository holds the CLI's source and its releases. The source builds against [zkmoney-public](https://github.com/aztec-labs-eng/zkmoney-public), the public source of the zk.money wallet, at a pinned commit.
 

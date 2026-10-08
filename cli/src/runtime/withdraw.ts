@@ -636,18 +636,18 @@ export function withdrawalSummary(
 }
 
 /**
- * Follow a record until it settles, reporting each phase change. This loop drives the tracker's
- * ticks itself. Ctrl-C stops the wait; the record keeps advancing on any later run.
+ * Run `tick` every `intervalMs` until `done` holds, reporting each change of `key`. Ctrl-C stops the
+ * wait and returns the last value; nothing is lost, as the next run picks up from the chain.
  */
-export async function waitForWithdrawal(
-  rt: Runtime,
-  localId: string,
-  onPhase: (record: WithdrawalRecord) => void,
-  intervalMs = 20_000,
-): Promise<WithdrawalRecord> {
-  const store = WithdrawalStorage.get(rt.storage)
-  const tracker = await withdrawalTracker(rt)
-  tracker.stop()
+export async function follow<T>(
+  tick: () => Promise<T>,
+  opts: {
+    key: (value: T) => string
+    done: (value: T) => boolean
+    onChange: (value: T) => void
+    intervalMs: number
+  },
+): Promise<T> {
   let stopped = false
   let wake: (() => void) | undefined
   const stop = () => {
@@ -669,25 +669,49 @@ export async function waitForWithdrawal(
   process.once("SIGINT", stop)
   process.once("SIGTERM", stop)
   let last: string | undefined
-  let record = store.get(localId)
-  if (!record) fail(`no withdrawal ${localId}`)
   try {
-    while (!stopped) {
-      await tracker.syncOnce()
-      record = store.get(localId) ?? record
-      const key = `${record.phase}|${record.l1TxHash ?? ""}|${record.swapExecuteTxHash ?? ""}`
+    for (;;) {
+      const value = await tick()
+      const key = opts.key(value)
       if (key !== last) {
         last = key
-        onPhase(record)
+        opts.onChange(value)
       }
-      if (isTerminal(record)) break
-      await sleep(intervalMs)
+      if (stopped || opts.done(value)) return value
+      await sleep(opts.intervalMs)
+      if (stopped) return value
     }
-    return record
   } finally {
     process.off("SIGINT", stop)
     process.off("SIGTERM", stop)
   }
+}
+
+/** Follow a record until it settles, driving the tracker's ticks itself. */
+export async function waitForWithdrawal(
+  rt: Runtime,
+  localId: string,
+  onPhase: (record: WithdrawalRecord) => void,
+  intervalMs = 20_000,
+): Promise<WithdrawalRecord> {
+  const store = WithdrawalStorage.get(rt.storage)
+  const tracker = await withdrawalTracker(rt)
+  tracker.stop()
+  let record = store.get(localId)
+  if (!record) fail(`no withdrawal ${localId}`)
+  return follow(
+    async () => {
+      await tracker.syncOnce()
+      record = store.get(localId) ?? record!
+      return record
+    },
+    {
+      key: (r) => `${r.phase}|${r.l1TxHash ?? ""}|${r.swapExecuteTxHash ?? ""}`,
+      done: isTerminal,
+      onChange: onPhase,
+      intervalMs,
+    },
+  )
 }
 
 /** Stop the watcher's timer so the process can exit. */

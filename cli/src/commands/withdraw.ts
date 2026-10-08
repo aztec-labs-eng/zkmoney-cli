@@ -26,7 +26,7 @@ const STAGE_LINE: Record<WithdrawStage, string> = {
   submitting: "burn mined; oxide's relayer releases it on Ethereum",
 }
 
-async function withRuntime<T>(cmd: Command, run: (rt: Runtime) => Promise<T>): Promise<T> {
+export async function withRuntime<T>(cmd: Command, run: (rt: Runtime) => Promise<T>): Promise<T> {
   const rt = await boot(cmd.optsWithGlobals<Globals>())
   try {
     return await run(rt)

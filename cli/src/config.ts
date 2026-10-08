@@ -48,6 +48,8 @@ export const settingsSchema = z
         claimFpc: z.string().optional(),
         sUSDSPortal: z.string().optional(),
         skyEscrowFactory: z.string().optional(),
+        acrossBridgeEscrowFactory: z.string().optional(),
+        cctpBridgeEscrowFactory: z.string().optional(),
       })
       .optional(),
     defaults: z
@@ -73,6 +75,8 @@ export const SETTING_KEYS = [
   "addresses.claimFpc",
   "addresses.sUSDSPortal",
   "addresses.skyEscrowFactory",
+  "addresses.acrossBridgeEscrowFactory",
+  "addresses.cctpBridgeEscrowFactory",
   "defaults.asset",
   "defaults.withdrawAsset",
 ] as const
@@ -91,6 +95,8 @@ const ENV_BY_KEY: Record<SettingKey, string> = {
   "addresses.claimFpc": "ZKMONEY_CLAIM_FPC",
   "addresses.sUSDSPortal": "ZKMONEY_SUSDS_PORTAL",
   "addresses.skyEscrowFactory": "ZKMONEY_SKY_ESCROW_FACTORY",
+  "addresses.acrossBridgeEscrowFactory": "ZKMONEY_ACROSS_BRIDGE_ESCROW_FACTORY",
+  "addresses.cctpBridgeEscrowFactory": "ZKMONEY_CCTP_BRIDGE_ESCROW_FACTORY",
   "defaults.asset": "ZKMONEY_ASSET",
   "defaults.withdrawAsset": "ZKMONEY_WITHDRAW_ASSET",
 }
@@ -216,6 +222,8 @@ export interface CliConfig {
    * for a manifest without one.
    */
   skyEscrowFactory: Resolved<string | undefined>
+  /** The bridge escrow factories set here; each overrides the manifest's. */
+  bridgeEscrowFactories: { across?: Resolved<string>; cctp?: Resolved<string> }
   addressOverrides: { registry?: string; portal?: string; token?: string }
   defaults: { asset: string; withdrawAsset: string }
   settings: Settings
@@ -319,6 +327,10 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
     claimFpcAddress,
     assets,
     skyEscrowFactory,
+    bridgeEscrowFactories: {
+      across: pick("addresses.acrossBridgeEscrowFactory", undefined, settings),
+      cctp: pick("addresses.cctpBridgeEscrowFactory", undefined, settings),
+    },
     addressOverrides: {
       registry: pick("addresses.registry", undefined, settings)?.value,
       portal: pick("addresses.portal", undefined, settings)?.value,
