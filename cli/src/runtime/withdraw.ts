@@ -245,7 +245,7 @@ export async function quoteWithdrawal(
       },
     }
   }
-  if (!rt.tuple.swapEscrowFactory)
+  if (!rt.tuple.swapEscrowFactoryV2)
     fail(`${asset} withdrawals are not available on ${rt.network}`, "withdraw DAI instead")
   if (amountAtomic <= WITHDRAW_RELAYER_TIP + cut + proverTip)
     fail(
@@ -256,7 +256,7 @@ export async function quoteWithdrawal(
       )}`,
     )
   const simulator = new SwapOnWithdrawSimulator(rt.l1 as never, {
-    swapEscrowFactory: tuplePortal(rt.tuple, "swapEscrowFactory"),
+    swapEscrowFactoryV2: tuplePortal(rt.tuple, "swapEscrowFactoryV2"),
     operationExecutor: tuplePortal(rt.tuple, "operationExecutor"),
     token: tuplePortal(rt.tuple, "token"),
   })
@@ -305,7 +305,7 @@ export async function planSwapLeg(
   if (quote.asset === "DAI") return undefined
   if (!quote.swap) fail("the swap could not be priced", "withdraw DAI instead")
   tuplePortal(rt.tuple, "l2Broadcaster")
-  const factory = tuplePortal(rt.tuple, "swapEscrowFactory")
+  const factory = tuplePortal(rt.tuple, "swapEscrowFactoryV2")
   const keys = await keysOf(rt)
   const account = await createOxideL1Reader(rt.l1).predictAccountAddress(
     resolveOxideAccountFactory({ tuple: rt.tuple }),
@@ -313,7 +313,7 @@ export async function planSwapLeg(
   )
   const nonce = Fr.random().toString() as Hex
   const plan = planSwapOnWithdraw({
-    swapEscrowFactory: factory,
+    swapEscrowFactoryV2: factory,
     output: quote.asset,
     l1Recipient: recipient,
     amount: amountAtomic,
@@ -333,7 +333,7 @@ export async function planSwapLeg(
 /** How a burn settles: the deployment, the portal's state for the sdk's tip check, and the swap leg. */
 export async function withdrawalOptions(rt: Runtime, swap?: SwapLeg): Promise<WithdrawalOptions> {
   const portal = await readPortalWithdrawalState(rt.l1 as never, tuplePortal(rt.tuple, "portal"))
-  return { tuple: rt.tuple, portal, ...(swap ? { swap: swap.plan } : {}) }
+  return { tuple: rt.tuple, portal, ...(swap ? { swap: { ...swap.plan, l1: rt.l1 } } : {}) }
 }
 
 function swapRecordFields(
@@ -345,6 +345,7 @@ function swapRecordFields(
     swapOutput: swap.output,
     swapEscrow: swap.plan.escrow,
     swapEscrowFactory: swap.factory,
+    swapEscrowLayout: "v2",
     swapRecoveryCommitment: swap.plan.escrowArgs.recoveryCommitment,
     swapNonce: swap.plan.escrowArgs.nonce,
     swapRelayerTip: swap.plan.escrowArgs.relayerTip.toString(),
