@@ -21,7 +21,7 @@ import {
 type Globals = { home?: string; profile?: string; nodeUrl?: string; l1Rpc?: string }
 
 const STAGE_LINE: Record<WithdrawStage, string> = {
-  building: "screening the recipient and pricing the exit",
+  building: "pricing the exit",
   proving: "proving and sending the burn",
   submitting: "burn mined; oxide's relayer releases it on Ethereum",
 }

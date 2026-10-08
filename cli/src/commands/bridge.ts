@@ -21,7 +21,7 @@ import { resolveWithdrawRecipient, type WithdrawStage } from "../runtime/withdra
 import { withRuntime } from "./withdraw.ts"
 
 const STAGE_LINE: Record<WithdrawStage, string> = {
-  building: "screening the recipient and pricing the bridge",
+  building: "pricing the bridge",
   proving: "proving and sending the burn",
   submitting: "burn mined; oxide's relayer releases it on Ethereum and runs the bridge",
 }
