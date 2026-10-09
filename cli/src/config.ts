@@ -46,6 +46,8 @@ export const settingsSchema = z
         portal: z.string().optional(),
         token: z.string().optional(),
         claimFpc: z.string().optional(),
+        sUSDSPortal: z.string().optional(),
+        skyEscrowFactory: z.string().optional(),
         acrossBridgeEscrowFactory: z.string().optional(),
         cctpBridgeEscrowFactory: z.string().optional(),
       })
@@ -71,6 +73,8 @@ export const SETTING_KEYS = [
   "addresses.portal",
   "addresses.token",
   "addresses.claimFpc",
+  "addresses.sUSDSPortal",
+  "addresses.skyEscrowFactory",
   "addresses.acrossBridgeEscrowFactory",
   "addresses.cctpBridgeEscrowFactory",
   "defaults.asset",
@@ -89,6 +93,8 @@ const ENV_BY_KEY: Record<SettingKey, string> = {
   "addresses.portal": "ZKMONEY_PORTAL",
   "addresses.token": "ZKMONEY_TOKEN",
   "addresses.claimFpc": "ZKMONEY_CLAIM_FPC",
+  "addresses.sUSDSPortal": "ZKMONEY_SUSDS_PORTAL",
+  "addresses.skyEscrowFactory": "ZKMONEY_SKY_ESCROW_FACTORY",
   "addresses.acrossBridgeEscrowFactory": "ZKMONEY_ACROSS_BRIDGE_ESCROW_FACTORY",
   "addresses.cctpBridgeEscrowFactory": "ZKMONEY_CCTP_BRIDGE_ESCROW_FACTORY",
   "defaults.asset": "ZKMONEY_ASSET",
@@ -209,12 +215,25 @@ export interface CliConfig {
   snapshot: ContractServiceConfig
   oxide: OxideEnvProfile
   claimFpcAddress: Resolved<string | undefined>
+  /** The profile's assets by token symbol, each a deployment found by its portal in its manifest. */
+  assets: Record<string, Resolved<AssetPin>>
+  /**
+   * Runs moves between DAI and sUSDS. A setting overrides the manifest's; the profile's stands in
+   * for a manifest without one.
+   */
+  skyEscrowFactory: Resolved<string | undefined>
   /** The bridge escrow factories set here; each overrides the manifest's. */
   bridgeEscrowFactories: { across?: Resolved<string>; cctp?: Resolved<string> }
   addressOverrides: { registry?: string; portal?: string; token?: string }
   defaults: { asset: string; withdrawAsset: string }
   settings: Settings
   profile: ConfigProfile
+}
+
+/** An asset's deployment in the oxide manifest. */
+export interface AssetPin {
+  portal: string
+  expectedGitSha?: string
 }
 
 function pick(
@@ -275,6 +294,21 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
     value: snapshot.contracts.claimFpc?.address,
     source: "profile",
   }
+  const assets: Record<string, Resolved<AssetPin>> = {}
+  for (const { symbol, ...pin } of version.assets ?? [])
+    assets[symbol] = { value: pin, source: "profile" }
+  const sUSDSPortal = pick("addresses.sUSDSPortal", undefined, settings)
+  if (sUSDSPortal)
+    assets.sUSDS = { value: { portal: sUSDSPortal.value }, source: sUSDSPortal.source }
+  const factoryEntry = version.contracts.skyEscrowFactory
+  const skyEscrowFactory: Resolved<string | undefined> = pick(
+    "addresses.skyEscrowFactory",
+    undefined,
+    settings,
+  ) ?? {
+    value: factoryEntry && "address" in factoryEntry ? factoryEntry.address : undefined,
+    source: "profile",
+  }
   return {
     home,
     network,
@@ -291,6 +325,8 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
     snapshot,
     oxide: version.oxide,
     claimFpcAddress,
+    assets,
+    skyEscrowFactory,
     bridgeEscrowFactories: {
       across: pick("addresses.acrossBridgeEscrowFactory", undefined, settings),
       cctp: pick("addresses.cctpBridgeEscrowFactory", undefined, settings),
