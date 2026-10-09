@@ -1,7 +1,6 @@
 /**
  * A prover tip buys a burn an early proof: a prover proves its epoch up to the burn's checkpoint instead of waiting
- * for the epoch to end. A portal pays the tip in its own token, so only the DAI deployment can offer one; no prover
- * takes sUSDS shares yet.
+ * for the epoch to end. The portal pays the tip in DAI, out of the burn.
  */
 import { quoteWithdrawalProverTip } from "@obsidion/sdk"
 import type { Address } from "viem"

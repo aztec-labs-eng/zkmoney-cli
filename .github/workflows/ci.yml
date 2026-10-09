@@ -1,0 +1,71 @@
+name: CI
+
+# Builds the CLI the way a release does: zkmoney-public at scripts/setup.sh's pinned commit, its contracts compiled,
+# the CLI joined to its workspace. Then typecheck and the unit tests.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AZTEC_VERSION: 5.2.0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: corepack enable
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: cli/package.json
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Cache Aztec installation
+        id: cache-aztec
+        uses: actions/cache@v4
+        with:
+          path: ~/.aztec
+          key: aztec-installation-${{ env.AZTEC_VERSION }}
+
+      - name: Install Aztec
+        if: steps.cache-aztec.outputs.cache-hit != 'true'
+        run: |
+          VERSION=$AZTEC_VERSION bash -i <(curl -sL "https://install.aztec.network/$AZTEC_VERSION")
+
+      - name: Add Aztec binaries to PATH
+        run: |
+          {
+            echo "$HOME/.aztec/bin"
+            echo "$HOME/.aztec/current/bin"
+            echo "$HOME/.aztec/current/node_modules/.bin"
+            echo "$HOME/.aztec/current/internal-bin"
+          } >> "$GITHUB_PATH"
+
+      - name: Build zkmoney-public at the pinned commit
+        run: sh scripts/setup.sh
+
+      - name: Typecheck
+        working-directory: cli
+        run: pnpm typecheck
+
+      - name: Unit tests
+        working-directory: cli
+        run: pnpm test

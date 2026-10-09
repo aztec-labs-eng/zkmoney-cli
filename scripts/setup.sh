@@ -9,7 +9,7 @@
 set -eu
 
 PUBLIC_REPO=https://github.com/aztec-labs-eng/zkmoney-public.git
-PUBLIC_COMMIT=68425f9cf408ac803eade04d10318fcf345444a0
+PUBLIC_COMMIT=835f726063f5f3a92405e26180f510a09ea32c46
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -26,6 +26,6 @@ cli=$(node -e 'console.log(require("node:path").relative(process.argv[1], proces
 grep -qx "  - $cli" "$dir/pnpm-workspace.yaml" || printf '  - %s\n' "$cli" >> "$dir/pnpm-workspace.yaml"
 
 cd "$dir"
-pnpm install
+pnpm install --no-frozen-lockfile
 [ -n "${ZKMONEY_WALLET_DIR:-}" ] || pnpm build-contracts
 pnpm --filter '@obsidion/zkmoney-cli^...' --filter '!@oxide/*' -r --if-present run build

@@ -129,17 +129,6 @@ A bridge is a withdrawal into an escrow on Ethereum (mainnet only). Oxide's rela
 
 `bridges quote` prices a bridge exactly as `bridge` would, and sends nothing. It never unlocks the account, signs, sends a transaction, claims a deposit or writes to `~/.zkmoney`, so it needs no passphrase and runs before `account init`. The amount is the DAI spent, fees included. The quote lists each fee: the withdrawal's release tip and portal cut, the prover tip with `--faster`, the escrow's run, the bridge's fee, and the destination's activation fee (HyperCore's 1 USDC on a new account's first deposit). It then shows what arrives at a 1:1 swap and at the swap's floor, and the proof's wait with and without a prover tip; the wait needs the node key, and shows as unknown without it. Every quote carries the time it was priced. An amount too small for the fees, a bridge's limits or the destination's minimum is refused with the reason. Prices move with gas and the bridges' fees, so `bridge` prices the route again when it submits, and that is the price it commits to.
 
-## Savings
-
-```sh
-zkmoney savings                                   # value in USDS, shares, rate, moves in flight
-zkmoney savings add 10 [--faster] --key mv-1      # DAI from the main balance into Sky's sUSDS
-zkmoney savings to-main 3 --key mv-2              # USDS of savings back to the main balance, as DAI
-zkmoney savings recover mv-1 [--to 0x…]           # finish a move whose escrow nobody ran
-```
-
-A move burns into an escrow. A relayer releases the burn on L1 and runs the escrow, which deposits into the other side, and the next sync (`balance`, `watch` or `savings`) claims that deposit. Each move pays a release tip and an escrow tip, both in DAI. `--faster` adds a prover tip to a move into Savings; a move back cannot take one, because its prover would be paid in sUSDS. `recover` needs `ZKMONEY_L1_PRIVATE_KEY` for gas. Savings needs a profile that names the sUSDS deployment, or the `addresses.sUSDSPortal` setting. The Sky escrow factory comes from the manifest, and `addresses.skyEscrowFactory` overrides it.
-
 ## Paylinks
 
 ```sh
@@ -169,7 +158,7 @@ zkmoney config set node.url https://…     # pin one for this network; flag > e
 zkmoney config unset node.url
 ```
 
-Keys: `profile`, `profileUrl`, `node.url`, `node.apiKey`, `l1.rpc`, `accountService.url`, `addresses.{registry,portal,token,claimFpc,sUSDSPortal,skyEscrowFactory,acrossBridgeEscrowFactory,cctpBridgeEscrowFactory}`, `defaults.{asset,withdrawAsset}`. `profile` is kept for the home (`~/.zkmoney/config.json`); `config set` keeps every other key for the network in use (`~/.zkmoney/<network>/config.json`). Environment equivalents are `ZKMONEY_<KEY>` (`ZKMONEY_NODE_URL`, `ZKMONEY_L1_RPC`, …). `--home <dir>` moves everything.
+Keys: `profile`, `profileUrl`, `node.url`, `node.apiKey`, `l1.rpc`, `accountService.url`, `addresses.{registry,portal,token,claimFpc,acrossBridgeEscrowFactory,cctpBridgeEscrowFactory}`, `defaults.{asset,withdrawAsset}`. `profile` is kept for the home (`~/.zkmoney/config.json`); `config set` keeps every other key for the network in use (`~/.zkmoney/<network>/config.json`). Environment equivalents are `ZKMONEY_<KEY>` (`ZKMONEY_NODE_URL`, `ZKMONEY_L1_RPC`, …). `--home <dir>` moves everything.
 
 ## Reading the output
 

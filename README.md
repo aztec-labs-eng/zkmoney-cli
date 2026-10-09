@@ -44,7 +44,7 @@ pnpm bundle                 # release/: a tar.gz per platform, a zip for all of 
 
 ## Releasing
 
-Bump `version` in `cli/package.json`, commit and push, then run `pnpm release` from `cli/`. It bundles that commit and publishes it here as `zkmoney-cli-v<version>`, with `install.sh` and `SHA256SUMS` among the assets. A release that needs wallet code zkmoney-public does not have yet is built over a clean wallet checkout instead: set `ZKMONEY_WALLET_DIR` for both `scripts/setup.sh` and `pnpm release`, and the notes name the wallet and Oxide commits.
+Bump `version` in `cli/package.json`, commit and push, then run `pnpm release` from `cli/`. It bundles that commit and publishes it here as `zkmoney-cli-v<version>`, with `install.sh` and `SHA256SUMS` among the assets.
 
 ## Layout
 
