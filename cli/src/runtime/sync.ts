@@ -19,7 +19,6 @@ import {
   type Transaction,
 } from "../frontCore.ts"
 import { createWalletSyncSource } from "@obsidion/sdk"
-import { note } from "../output.ts"
 import type { Runtime } from "./boot.ts"
 
 export function registryOpts(rt: Runtime): RegistryTagResolutionOpts {
@@ -107,11 +106,6 @@ export async function openSync(rt: Runtime): Promise<SyncHandle> {
       } else {
         await coordinator.tickNow()
       }
-      // Imported late: savings reaches this module through send.
-      const { settlePendingSavings } = await import("./savings.ts")
-      await settlePendingSavings(rt).catch((err: unknown) =>
-        note(`savings moves not settled: ${err instanceof Error ? err.message : String(err)}`),
-      )
     },
     stop: () => coordinator.stop(),
   }
