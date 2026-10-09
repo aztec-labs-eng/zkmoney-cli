@@ -99,3 +99,53 @@ describe("settings", () => {
     })
   })
 })
+
+describe("assets", () => {
+  const SKY_PORTAL = "0x00000000000000000000000000000000000000aa"
+  const DAI = { portal: "0x00000000000000000000000000000000000000bb" }
+  const doc = (sUSDS?: { portal: string }) => ({
+    profileId: "staging-v5",
+    network: "testnet",
+    publishedAt: "2026-10-05T00:00:00Z",
+    shared: { l1ChainId: 11155111, xmtpEnv: "dev", rollupVersion: "1821665230" },
+    current: "0.1.0",
+    versions: {
+      "0.1.0": {
+        schemaVersion: "1",
+        deployedAt: "2026-10-05T00:00:00Z",
+        nodeUrl: "https://node.example",
+        l1RpcUrl: "https://l1.example",
+        accountServiceUrl: "https://account.example",
+        zkmoneyApiUrl: "https://api.example",
+        paylinkDomain: "https://paylink.example",
+        oxide: { manifestUrl: "https://manifest.example/staging.v4.json", ...DAI },
+        assets: [{ symbol: "DAI", ...DAI }, ...(sUSDS ? [{ symbol: "sUSDS", ...sUSDS }] : [])],
+        contracts: {
+          sponsorFPC: { address: "0x" + "1".repeat(64), classId: "0x" + "2".repeat(64) },
+        },
+      },
+    },
+  })
+  const serve =
+    (body: unknown): typeof fetch =>
+    async () =>
+      new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } })
+  const load = (dir: string, body: unknown) =>
+    loadConfig({ home: dir, profile: "staging" }, serve(body))
+
+  it("come from the network's profile, and a settings override wins for sUSDS", async () => {
+    const dir = home()
+    expect((await load(dir, doc({ portal: SKY_PORTAL }))).assets).toEqual({
+      DAI: { value: DAI, source: "profile" },
+      sUSDS: { value: { portal: SKY_PORTAL }, source: "profile" },
+    })
+    expect((await load(dir, doc())).assets.sUSDS).toBeUndefined()
+
+    writeSettingsFile(settingsPath(dir, "testnet"), setSetting({}, "addresses.sUSDSPortal", "0xcc"))
+    expect((await load(dir, doc({ portal: SKY_PORTAL }))).assets.sUSDS).toEqual({
+      value: { portal: "0xcc" },
+      source: "file",
+    })
+  })
+
+})
