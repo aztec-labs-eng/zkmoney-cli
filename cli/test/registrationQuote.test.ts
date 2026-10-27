@@ -66,7 +66,8 @@ describe("registrationQuote", () => {
   })
 
   it("asks less for an earned tag", () => {
-    const quote = registrationQuote(schedule, "earned_tag", cut)
+    const cheap = { fee: dai(3) / 10n, min: dai(2) / 10n }
+    const quote = registrationQuote(cheap, "earned_tag", 0n)
     expect(quote.total).toBe(REGISTRATION_ASK_DEPOSIT_TOTAL.earned_tag)
     expect(quote.total).toBeLessThan(REGISTRATION_ASK_DEPOSIT_TOTAL.standard)
   })

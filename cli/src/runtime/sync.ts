@@ -71,7 +71,9 @@ export async function openSync(rt: Runtime): Promise<SyncHandle> {
   const tag = (await rt.account()).unlocked.file.identity?.tag
   const coordinator = new WalletSyncCoordinator({
     source: createWalletSyncSource({
-      readBalance: () => tokenService.readBalanceAssumingSynced(),
+      readBalances: async () => ({
+        [token.address]: await tokenService.readBalanceAssumingSynced(),
+      }),
       wallet: rt.wallet,
       tokenAddress: token.address,
       accountAddress: account.getAddress().toString(),

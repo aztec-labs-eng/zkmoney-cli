@@ -81,7 +81,6 @@ import {
   getBroadcasterArtifact,
   readFpcFundingCut,
   readNameClaimLog,
-  readSweepEvents,
   type WebAuthnAlphaAuthProvider,
 } from "@obsidion/sdk"
 import type { Runtime } from "./boot.ts"
@@ -520,7 +519,6 @@ async function signDepsFor(
       publicClient: rt.l1,
       env: ctx.env,
       tuple: rt.tuple,
-      network: rt.network,
     }),
     seedSipaDeposit: depositSeeder(rt, ctx.env),
   }
@@ -610,6 +608,26 @@ function reportingFailure<A extends unknown[], R>(what: string, fn: (...args: A)
   }
 }
 
+/**
+ * front-core's reader over the deposit rail's records, which the deposit sync keeps current: a
+ * registration address's funding and sweeps are what that sync last observed.
+ */
+function registrationDepositReader(
+  rt: Runtime,
+  ctx: RegistrationContext,
+  termsFor?: (account: string) => { fee: bigint; minDeposit: bigint } | undefined,
+) {
+  return createRegistrationDepositReader({
+    publicClient: rt.l1,
+    registrationImplementation: ctx.registrationImplementation,
+    registry: ctx.env.registry,
+    portal: ctx.portal,
+    registrationController: ctx.scheduleSource,
+    store: SIPADepositStore.get(rt.storage),
+    termsFor,
+  })
+}
+
 /** The resume machine's collaborators. A tick only observes; the register command publishes. */
 export async function resumeDeps(rt: Runtime, ctx: RegistrationContext): Promise<OxideResumeDeps> {
   // `termsFor` is synchronous, so the stored terms are read up front for every record.
@@ -621,21 +639,13 @@ export async function resumeDeps(rt: Runtime, ctx: RegistrationContext): Promise
   return {
     env: ctx.env,
     l1: ctx.l1,
-    deposits: createRegistrationDepositReader({
-      publicClient: rt.l1,
-      registrationImplementation: ctx.registrationImplementation,
-      registry: ctx.env.registry,
-      portal: ctx.portal,
-      registrationController: ctx.scheduleSource,
-      fundingTokens: ctx.fundingTokens,
-      termsFor: (account) => {
-        const stored = terms.get(account.toLowerCase())
-        const record = ctx.pending.get(account)
-        const schedule = signedSchedule(stored)
-        return schedule && (record?.fee === undefined || schedule.fee === BigInt(record.fee))
-          ? { fee: schedule.fee, minDeposit: schedule.min }
-          : undefined
-      },
+    deposits: registrationDepositReader(rt, ctx, (account) => {
+      const stored = terms.get(account.toLowerCase())
+      const record = ctx.pending.get(account)
+      const schedule = signedSchedule(stored)
+      return schedule && (record?.fee === undefined || schedule.fee === BigInt(record.fee))
+        ? { fee: schedule.fee, minDeposit: schedule.min }
+        : undefined
     }),
     pendingStore: ctx.pending,
     resolveLocalTag: localTagResolver(rt, ctx),
@@ -751,7 +761,7 @@ export async function readRegistrationProgress(
         }),
       })),
     ),
-    readSweepEvents(rt.l1 as never, sipa),
+    registrationDepositReader(rt, ctx).readSweeps(sipa),
     ctx.l1.readUserAddress(ctx.env.registry, record.nameHash),
     loadRegistrationTerms(rt, record.account, record.tag),
   ])

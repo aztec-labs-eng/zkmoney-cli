@@ -53,6 +53,7 @@ import {
   isLoggingEnabled,
   isSettledSipaPhase,
   resolveOxideAccountFactory,
+  selfSipaResolverKeys,
   setActiveNetworkId,
   setLoggingEnabled,
   setupSipaDiscovery,
@@ -214,11 +215,7 @@ async function derive(
 ): Promise<Derived> {
   const tuple = rt.tuple
   const user = keys.account.getAddress()
-  const stealth = deriveStealthKey(keys.secretKey)
-  const resolved = await new SipaSelfResolver(
-    stealth.scalar,
-    resolver.resolverPublicKey,
-  ).resolveAddress({
+  const resolved = await new SipaSelfResolver(selfSipaResolverKeys(keys.secretKey)).resolveAddress({
     protocol: tuple.sipaRecoveryProtocol ?? "legacy-eoa",
     user,
     recoveryAccount: await recoveryAccountOf(rt, keys),

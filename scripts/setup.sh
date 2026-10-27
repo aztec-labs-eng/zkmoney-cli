@@ -9,7 +9,7 @@
 set -eu
 
 PUBLIC_REPO=https://github.com/aztec-labs-eng/zkmoney-public.git
-PUBLIC_COMMIT=835f726063f5f3a92405e26180f510a09ea32c46
+PUBLIC_COMMIT=4a63236515fe9d1d6d22d076ca10af2de875c898
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 

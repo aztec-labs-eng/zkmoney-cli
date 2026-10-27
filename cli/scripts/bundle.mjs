@@ -97,32 +97,37 @@ const packageOf = (path) =>
     .split("/")
     .slice(0, path.startsWith("@") ? 2 : 1)
     .join("/")
-await build({
-  entryPoints: [join(pkgDir, "src/cli.ts")],
-  outfile: join(app, "lib/cli.mjs"),
-  bundle: true,
-  platform: "node",
-  format: "esm",
-  target: "node20",
-  logLevel: "warning",
-  plugins: [
-    {
-      name: "external-dependencies",
-      setup(b) {
-        b.onResolve({ filter: /^[^./]/ }, (args) => {
-          const pkg = packageOf(args.path)
-          return WORKSPACE_SCOPES.includes(pkg.split("/")[0]) || compiledIn.has(pkg)
-            ? undefined
-            : { path: args.path, external: true }
-        })
+// The CLI, and the source generation a newer CLI runs to read this one's network.
+for (const [entry, out] of [
+  ["src/cli.ts", "lib/cli.mjs"],
+  ["src/generation.ts", "lib/generation.mjs"],
+]) {
+  await build({
+    entryPoints: [join(pkgDir, entry)],
+    outfile: join(app, out),
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node20",
+    logLevel: "warning",
+    plugins: [
+      {
+        name: "external-dependencies",
+        setup(b) {
+          b.onResolve({ filter: /^[^./]/ }, (args) => {
+            const pkg = packageOf(args.path)
+            return WORKSPACE_SCOPES.includes(pkg.split("/")[0]) || compiledIn.has(pkg)
+              ? undefined
+              : { path: args.path, external: true }
+          })
+        },
       },
-    },
-  ],
-})
-
-// The contract artifacts carry the build machine's absolute source paths; keep them home-relative.
-const cli = join(app, "lib/cli.mjs")
-writeFileSync(cli, readFileSync(cli, "utf8").replaceAll(`${homedir()}/`, "~/"))
+    ],
+  })
+  // The contract artifacts carry the build machine's absolute source paths; keep them home-relative.
+  const built = join(app, out)
+  writeFileSync(built, readFileSync(built, "utf8").replaceAll(`${homedir()}/`, "~/"))
+}
 
 // The entry quiets the libraries before anything imports them, then loads the CLI.
 writeFileSync(

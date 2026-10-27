@@ -53,3 +53,4 @@ Bump `version` in `cli/package.json`, commit and push, then run `pnpm release` f
 - `cli/src/keystore/` the passkey backends (`fido2.ts`, `software.ts`) and the account file.
 - `cli/src/frontCore.ts` the part of front-core a node process can load; the CLI never loads React.
 - `install.sh` the installer, inside every archive and attached to every release.
+- `cli/src/generation/` the Aztec v5 source generation: `lib/generation.mjs` in the archive, which a newer CLI runs as a child process to read and refund this network.
