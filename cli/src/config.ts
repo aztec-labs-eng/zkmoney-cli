@@ -56,6 +56,12 @@ export const settingsSchema = z
         withdrawAsset: z.enum(["DAI", "USDC", "USDT", "ETH"]).optional(),
       })
       .optional(),
+    /** The old network's node, for an upgrade; the previous profile's node otherwise. */
+    sourceNode: z
+      .object({ url: z.string().url().optional(), apiKey: z.string().optional() })
+      .optional(),
+    /** Where the v5 CLI that reads the old network is installed. */
+    generation: z.object({ v5: z.string().optional() }).optional(),
   })
   .strict()
 export type Settings = z.infer<typeof settingsSchema>
@@ -75,6 +81,9 @@ export const SETTING_KEYS = [
   "addresses.cctpBridgeEscrowFactory",
   "defaults.asset",
   "defaults.withdrawAsset",
+  "sourceNode.url",
+  "sourceNode.apiKey",
+  "generation.v5",
 ] as const
 export type SettingKey = (typeof SETTING_KEYS)[number]
 
@@ -93,6 +102,9 @@ const ENV_BY_KEY: Record<SettingKey, string> = {
   "addresses.cctpBridgeEscrowFactory": "ZKMONEY_CCTP_BRIDGE_ESCROW_FACTORY",
   "defaults.asset": "ZKMONEY_ASSET",
   "defaults.withdrawAsset": "ZKMONEY_WITHDRAW_ASSET",
+  "sourceNode.url": "ZKMONEY_SOURCE_NODE_URL",
+  "sourceNode.apiKey": "ZKMONEY_SOURCE_NODE_API_KEY",
+  "generation.v5": "ZKMONEY_GENERATION_V5",
 }
 
 export function defaultHome(): string {
@@ -217,6 +229,10 @@ export interface CliConfig {
   bridgeEscrowFactories: { across?: Resolved<string>; cctp?: Resolved<string> }
   addressOverrides: { registry?: string; portal?: string; token?: string }
   defaults: { asset: string; withdrawAsset: string }
+  /** The old network's node, when one is set; an upgrade falls back to the previous profile's. */
+  sourceNode: { url?: string; apiKey?: string }
+  /** Where the v5 CLI is installed, when set. */
+  generationV5Dir: string | undefined
   settings: Settings
   profile: ConfigProfile
 }
@@ -310,6 +326,11 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
       asset: pick("defaults.asset", undefined, settings)?.value ?? "DAI",
       withdrawAsset: pick("defaults.withdrawAsset", undefined, settings)?.value ?? "DAI",
     },
+    sourceNode: {
+      url: pick("sourceNode.url", undefined, settings)?.value,
+      apiKey: pick("sourceNode.apiKey", undefined, settings)?.value,
+    },
+    generationV5Dir: pick("generation.v5", undefined, settings)?.value,
     settings,
     profile,
   }

@@ -150,6 +150,15 @@ zkmoney contacts list
 zkmoney contacts remove bob
 ```
 
+## Upgrading from the old network
+
+```sh
+zkmoney upgrade            # move the account from the v5 network to this one; resumes a saved run
+zkmoney upgrade status     # where the saved run stands, and what the old network still holds
+```
+
+An account that used the v5 CLI keeps its keys and its tag on this network, but its funds and its registration record stay on the v5 rollup until it upgrades. `upgrade` reads the old network through the v5 CLI, which it installs into `~/.local/share/zkmoney-cli-v5` with `gh` on first use (`generation.v5` or `ZKMONEY_GENERATION_V5` names another install), over the PXE the v5 CLI kept under `~/.zkmoney/<network>/pxe`. It then updates the account's record on this network, which the new ClaimFPC sponsors, and refunds the frozen funds through the migration executor the new deployment publishes: no fee, no relayer tip, one approval per refund batch (a key file signs them with no prompt; a security key asks for a touch each). The refunds arrive as direct deposits that `balance` or `watch` claims. The run is saved as it goes: Ctrl-C stops it between steps and `zkmoney upgrade` again resumes it, asking only for what it has not yet approved. The old network's node needs the same kind of key as this one's; `sourceNode.apiKey` saves one, and `sourceNode.url` points at another old-network node. Only a frozen old network upgrades, and only an account with a tag: one with none has nothing to sponsor its first transaction here. Funds below what a refund batch can move stay behind, and so do deposits waiting for their L1 block to be final; `status` lists both.
+
 ## Settings
 
 ```sh
@@ -158,7 +167,7 @@ zkmoney config set node.url https://…     # pin one for this network; flag > e
 zkmoney config unset node.url
 ```
 
-Keys: `profile`, `profileUrl`, `node.url`, `node.apiKey`, `l1.rpc`, `accountService.url`, `addresses.{registry,portal,token,claimFpc,acrossBridgeEscrowFactory,cctpBridgeEscrowFactory}`, `defaults.{asset,withdrawAsset}`. `profile` is kept for the home (`~/.zkmoney/config.json`); `config set` keeps every other key for the network in use (`~/.zkmoney/<network>/config.json`). Environment equivalents are `ZKMONEY_<KEY>` (`ZKMONEY_NODE_URL`, `ZKMONEY_L1_RPC`, …). `--home <dir>` moves everything.
+Keys: `profile`, `profileUrl`, `node.url`, `node.apiKey`, `l1.rpc`, `accountService.url`, `addresses.{registry,portal,token,claimFpc,acrossBridgeEscrowFactory,cctpBridgeEscrowFactory}`, `defaults.{asset,withdrawAsset}`, `sourceNode.{url,apiKey}`, `generation.v5`. `profile` is kept for the home (`~/.zkmoney/config.json`); `config set` keeps every other key for the network in use (`~/.zkmoney/<network>/config.json`). Environment equivalents are `ZKMONEY_<KEY>` (`ZKMONEY_NODE_URL`, `ZKMONEY_L1_RPC`, …). `--home <dir>` moves everything.
 
 ## Reading the output
 
