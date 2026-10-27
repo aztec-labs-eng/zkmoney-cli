@@ -1,6 +1,7 @@
 // Publishes the bundle as the release zkmoney-cli-v<version> of aztec-labs-eng/zkmoney-cli, with install.sh
-// beside the archives so `gh release download -p install.sh` fetches the newest release's installer. It
-// bundles this repository's HEAD, committed and pushed, and the release's tag points at it.
+// beside the archives. This is the v5 line, which a newer CLI's `zkmoney upgrade` installs by version, so the
+// release is never marked latest. It bundles this repository's HEAD, committed and pushed, and the release's
+// tag points at it.
 //
 //   pnpm release [out-dir]
 import { execFileSync } from "node:child_process"
@@ -47,10 +48,11 @@ execFileSync(
     REPO,
     "--target",
     head,
+    "--latest=false",
     "--title",
-    `zkmoney CLI ${version}`,
+    `zkmoney CLI ${version} (v5 network)`,
     "--notes",
-    `Install on macOS or Linux, x64 or arm64 (needs Node.js 22 or later and a signed-in gh):\n\n    gh release download -R ${REPO} -p install.sh -O - | sh\n\nBuilt from ${head} over zkmoney-public ${built}.`,
+    `The CLI for the old v5 network, which \`zkmoney upgrade\` in the current CLI installs to read and refund it. To use zk.money today, install the current release instead:\n\n    gh release download -R ${REPO} -p install.sh -O - | sh\n\nBuilt from ${head} over zkmoney-public ${built}.`,
   ],
   { stdio: "inherit" },
 )
