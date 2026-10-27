@@ -73,8 +73,10 @@ download() {
   if [ -n "$version" ]; then
     tag="zkmoney-cli-v$version"
   else
+    # The highest version, whatever order the releases were published in.
     tag=$(gh api "repos/$repo/releases?per_page=100" \
-      --jq '[.[] | select(.draft | not) | select(.tag_name | startswith("zkmoney-cli-v"))][0].tag_name // empty') ||
+      --jq '[.[] | select((.draft or .prerelease) | not) | .tag_name | select(startswith("zkmoney-cli-v"))]
+        | sort_by(ltrimstr("zkmoney-cli-v") | split(".") | map(tonumber? // 0)) | last // empty') ||
       die "cannot read the releases of $repo with this GitHub login"
     [ -n "$tag" ] || die "$repo has no zkmoney release yet"
   fi

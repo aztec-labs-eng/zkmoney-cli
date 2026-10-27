@@ -10,6 +10,7 @@ import { contactsCommand } from "./commands/contacts.ts"
 import { paylinkCommand } from "./commands/paylink.ts"
 import { paymentsCommand } from "./commands/payments.ts"
 import { sendCommand } from "./commands/send.ts"
+import { upgradeCommand } from "./commands/upgrade.ts"
 import { withdrawCommand, withdrawalsCommand } from "./commands/withdraw.ts"
 import { setLoggingEnabled } from "./frontCore.ts"
 import { CliError, note, rpcRefusal } from "./output.ts"
@@ -45,6 +46,7 @@ const program = new Command("zkmoney")
   .addCommand(bridgesCommand())
   .addCommand(paylinkCommand())
   .addCommand(contactsCommand())
+  .addCommand(upgradeCommand())
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   if (err instanceof CliError) {

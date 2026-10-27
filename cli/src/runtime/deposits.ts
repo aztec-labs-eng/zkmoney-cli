@@ -16,6 +16,7 @@ import type { LegacySipaDeployArgs } from "@oxide/l1-contracts/legacy_sipa.js"
 import { DEFAULT_CONTRACTS } from "@obsidion/core/constants"
 import {
   loadOxideDeployment,
+  type OxideDeployment,
   type OxideDeploymentTable,
   type SipaIntentName,
 } from "@obsidion/core/oxide"
@@ -73,7 +74,7 @@ import {
   type SipaOrigin,
   type SipaRow,
 } from "../frontCore.ts"
-import type { Runtime } from "./boot.ts"
+import type { ReadOnlyRuntime, Runtime } from "./boot.ts"
 import {
   RAIL_REGISTERED,
   claimSponsorContext,
@@ -144,24 +145,41 @@ export async function readDepositFacts(rt: Runtime): Promise<DepositFacts> {
   return { ...tokens, fee: terms.depositFee, cap: terms.txAmountCap }
 }
 
+const deployments = new WeakMap<ReadOnlyRuntime, Promise<OxideDeployment>>()
+
+/** The pinned deployment as the manifest publishes it: its bridges and features, read once per process. */
+export function pinnedDeployment(rt: ReadOnlyRuntime): Promise<OxideDeployment> {
+  let pending = deployments.get(rt)
+  if (!pending) {
+    pending = loadOxideDeployment({
+      manifestUrl: rt.config.oxide.manifestUrl,
+      portal: rt.config.addressOverrides.portal ?? rt.config.oxide.portal,
+      network: rt.network,
+      expectedGitSha: rt.config.oxide.expectedGitSha,
+    }).then(
+      ({ deployment }) => deployment,
+      (err) => {
+        deployments.delete(rt)
+        throw err
+      },
+    )
+    deployments.set(rt, pending)
+  }
+  return pending
+}
+
 const tables = new WeakMap<Runtime, Promise<OxideDeploymentTable>>()
 
 /** The forwarding table the deployment's SIPAs commit to, its rows read once per process. */
 export function deploymentTable(rt: Runtime): Promise<OxideDeploymentTable> {
   let pending = tables.get(rt)
   if (!pending) {
-    pending = (async () => {
-      const { deployment } = await loadOxideDeployment({
-        manifestUrl: rt.config.oxide.manifestUrl,
-        portal: rt.config.addressOverrides.portal ?? rt.config.oxide.portal,
-        network: rt.network,
-        expectedGitSha: rt.config.oxide.expectedGitSha,
+    pending = pinnedDeployment(rt)
+      .then((deployment) => readDeploymentTable(rt.l1, deployment))
+      .catch((err) => {
+        tables.delete(rt)
+        throw err
       })
-      return readDeploymentTable(rt.l1, deployment)
-    })().catch((err) => {
-      tables.delete(rt)
-      throw err
-    })
     tables.set(rt, pending)
   }
   return pending
