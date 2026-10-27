@@ -180,6 +180,7 @@ for (const entry of [
   "release",
   "scratch",
   "bin/zkmoney.mjs",
+  "bin/generation.mjs",
   "tsconfig.json",
   "vitest.config.ts",
 ])
