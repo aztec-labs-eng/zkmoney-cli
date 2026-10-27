@@ -45,7 +45,7 @@ function generationEntry(dir: string): string | undefined {
 /** Installs the v5 release into `dir` with the GitHub CLI, as `install.sh` does for this one. */
 async function installGenerationV5(dir: string): Promise<void> {
   note(`installing the v5 CLI ${GENERATION_V5_VERSION} into ${dir} to read the old network`)
-  const script = `gh release download -R ${REPO} -p install.sh -O - | sh -s -- ${GENERATION_V5_VERSION}`
+  const script = `gh release download zkmoney-cli-v${GENERATION_V5_VERSION} -R ${REPO} -p install.sh -O - | sh -s -- ${GENERATION_V5_VERSION}`
   await new Promise<void>((resolve, reject) => {
     const child = spawn("sh", ["-c", script], {
       stdio: ["ignore", "inherit", "inherit"],
