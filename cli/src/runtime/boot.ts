@@ -4,25 +4,28 @@
  * manifest. Commands that sign also unlock the account and build the TokenService.
  */
 import { join } from "node:path"
-import { createPXE, getPXEConfig } from "@aztec/pxe/server"
-import type { PXE } from "@aztec/pxe/server"
-import type { AztecNode } from "@aztec/aztec.js/node"
+import { createPXE, getPXEConfig } from "@aztec-labs/pxe/server"
+import type { PXE } from "@aztec-labs/pxe/server"
+import type { AztecNode } from "@aztec-labs/aztec.js/node"
 import { createPublicClient, http, type Chain, type Hex, type PublicClient } from "viem"
 import { foundry, mainnet, sepolia } from "viem/chains"
 import { loadOxideManifestTuple } from "@obsidion/core/oxide"
 import { isAllZeroHex } from "@obsidion/core/oxide"
 import type { OxideEnvTuple } from "@obsidion/core/types"
+import { OxidePortalContract } from "@oxide/l1-contracts/oxide_portal.js"
 import {
   ContractService,
   NodeContractServiceStorage,
   createClassArtifactResolver,
   getBroadcasterArtifact,
   resolveInstanceArtifact,
+  readOxideTokenImmutables,
   ObsidionWallet,
   TokenService,
   createNode,
   type Network,
   type ObsidionAccount,
+  type OxideTokenImmutables,
 } from "@obsidion/sdk"
 import {
   createOxideTeeSignerSource,
@@ -31,8 +34,8 @@ import {
   type OxideRegistrationEnv,
 } from "../frontCore.ts"
 import { createArtifactPinResolver } from "@obsidion/config-client"
-import type { ContractArtifact } from "@aztec/stdlib/abi"
-import { AztecAddress } from "@aztec/stdlib/aztec-address"
+import type { ContractArtifact } from "@aztec-labs/stdlib/abi"
+import { AztecAddress } from "@aztec-labs/stdlib/aztec-address"
 import { loadConfig, type CliConfig, type Flags } from "../config.ts"
 import { providerFor } from "../keystore/authenticator.ts"
 import { rememberIdentity, unlockAccount, type UnlockedAccount } from "../keystore/keystore.ts"
@@ -68,7 +71,7 @@ export function l1ChainFor(chainId: number): Chain {
   return { ...foundry, id: chainId, name: `Chain ${chainId}` }
 }
 
-export const storagePath = (config: CliConfig) => join(config.home, config.dir, "store.json")
+export const storagePath = (config: CliConfig) => join(config.home, config.rollupDir, "store.json")
 
 /** The registration controller is the one contract the manifest does not carry; the registry names it. */
 async function withRegistrationController(
@@ -125,15 +128,37 @@ export async function bootReadOnly(opts: Flags = {}): Promise<ReadOnlyRuntime> {
   return { config, network, node, tuple, l1, l1Chain }
 }
 
+/**
+ * The token is counterfactual: its private functions read its immutables from the PXE, so every
+ * PXE that calls it stores them first. They are read off the token's L1 portal, once per process.
+ */
+function tokenImmutablesSource(l1: PublicClient, tuple: OxideEnvTuple) {
+  const portal = new OxidePortalContract(
+    l1 as unknown as ConstructorParameters<typeof OxidePortalContract>[0],
+    tuple.portal as Hex,
+  )
+  let immutables: Promise<OxideTokenImmutables> | undefined
+  return (token: AztecAddress): Promise<OxideTokenImmutables> => {
+    if (token.toString().toLowerCase() !== tuple.l2Token.toLowerCase())
+      throw new Error(
+        `no immutables are known for token ${token}; the manifest names ${tuple.l2Token}`,
+      )
+    immutables ??= readOxideTokenImmutables(portal)
+    immutables.catch(() => (immutables = undefined))
+    return immutables
+  }
+}
+
 export async function boot(opts: Flags = {}): Promise<Runtime> {
   const { config, network, node, tuple, l1, l1Chain } = await bootReadOnly(opts)
+  TokenService.setImmutablesSource(tokenImmutablesSource(l1, tuple))
   const pxe = await createPXE(
     node,
     {
       ...getPXEConfig(),
       proverEnabled: true,
       autoSync: false,
-      dataDirectory: join(config.home, config.dir, "pxe"),
+      dataDirectory: join(config.home, config.rollupDir, "pxe"),
     },
     { loggers: {} },
   )
@@ -210,14 +235,21 @@ export async function boot(opts: Flags = {}): Promise<Runtime> {
           register: true,
         })
         const l2Address = account.getAddress().toString()
-        if (unlocked.file.identity?.l2Address && unlocked.file.identity.l2Address !== l2Address) {
-          fail(
-            `the account file says ${unlocked.file.identity.l2Address} but the keys derive ${l2Address}`,
-            "the passkey or master secret changed; restore the original account file",
-          )
+        const known = unlocked.file.identity
+        if (known?.l2Address && known.l2Address !== l2Address) {
+          if (known.rollupVersion === config.rollupVersion)
+            fail(
+              `the account file says ${known.l2Address} but the keys derive ${l2Address}`,
+              "the passkey or master secret changed; restore the original account file",
+            )
+          // The same keys derive another address on another rollup; the file follows this one.
+          note(`note: on rollup ${config.rollupVersion} this account is ${l2Address}`)
         }
-        if (!unlocked.file.identity?.l2Address)
-          rememberIdentity(config.home, config.dir, { l2Address })
+        if (known?.l2Address !== l2Address || known.rollupVersion !== config.rollupVersion)
+          rememberIdentity(config.home, config.dir, {
+            l2Address,
+            rollupVersion: config.rollupVersion,
+          })
         return { unlocked, account }
       })()
       return accountPromise
@@ -229,8 +261,7 @@ export async function boot(opts: Flags = {}): Promise<Runtime> {
         const tee = createOxideTeeSignerSource({
           l1RpcUrl: config.l1RpcUrl.value,
           l1Chain,
-          getNode: () => node,
-          getTokenAddress: () => contractService.getContractAddress("oxideToken"),
+          getTuple: () => tuple,
         })
         const signer = await tee.load()
         if (!signer)

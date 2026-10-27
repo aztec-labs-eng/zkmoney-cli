@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPXE } from "@aztec/pxe/server"
+import { EthAddress } from "@aztec-labs/aztec.js/addresses"
+import { createPXE } from "@aztec-labs/pxe/server"
 import { WITHDRAW_RELAYER_TIP } from "@obsidion/core/constants"
 import {
   swappedAtFloor,
@@ -34,7 +35,7 @@ const network = vi.hoisted(() => ({
   hyperCoreAccountExists: false,
   /** The relayer's floor for running an escrow, before the wallet's margin. */
   runFloor: 0n,
-  fpcFundingCut: 0n,
+  withdrawalFee: 0n,
   proverTip: 0n,
 }))
 
@@ -57,7 +58,12 @@ vi.mock("@oxide/oxide-client/l1_operation_quote.js", async (importOriginal) => (
 vi.mock("@obsidion/sdk", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   findBalanceOfSlot: async () => 2n,
-  readFpcFundingCut: async () => network.fpcFundingCut,
+  readWithdrawalExecutor: async () => ({
+    address: EXECUTOR,
+    kind: "plain",
+    portal: TUPLE.portal,
+    fee: network.withdrawalFee,
+  }),
   quoteWithdrawalProverTip: async () => ({ proverTip: network.proverTip }),
 }))
 vi.mock("../src/frontCore.ts", async (importOriginal) => ({
@@ -69,7 +75,7 @@ vi.mock("../src/frontCore.ts", async (importOriginal) => ({
   },
 }))
 // A quote must never open a PXE or unlock the keystore; these fail the test if it does.
-vi.mock("@aztec/pxe/server", async (importOriginal) => ({
+vi.mock("@aztec-labs/pxe/server", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   createPXE: vi.fn(async () => {
     throw new Error("a quote opened a PXE")
@@ -93,10 +99,12 @@ vi.mock("@obsidion/core/oxide", async (importOriginal) => ({
 
 const DAI = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address
 const FEED = ("0x" + "5f".repeat(20)) as Address
+const EXECUTOR = ("0x" + "e1".repeat(20)) as Address
 const RECIPIENT = "0x000000000000000000000000000000000000dEaD"
 const TUPLE = {
   token: DAI,
   portal: "0xdf410ad448A0f7165181FBdB32f8896f4a0d9449",
+  plainWithdrawalExecutor: EXECUTOR,
   withdrawalSubsidy: "0x" + "51".repeat(20),
   operationExecutor: "0x" + "0e".repeat(20),
   proverSubsidy: "0x" + "9b".repeat(20),
@@ -166,7 +174,7 @@ const funding = (quote: BridgeQuote) => ({
   amount: quote.amount,
   withdrawalRelayerTip: quote.releaseTip,
   proverTip: quote.proverTip,
-  fpcFundingCut: quote.fpcFundingCut,
+  plainWithdrawalExecutor: { address: EthAddress.fromString(EXECUTOR), fee: quote.withdrawalFee },
   relayerTip: quote.escrowTip,
 })
 
@@ -188,7 +196,7 @@ beforeEach(() => {
   ]
   network.hyperCoreAccountExists = false
   network.runFloor = 800n * 10n ** 15n
-  network.fpcFundingCut = 100n * 10n ** 15n
+  network.withdrawalFee = 100n * 10n ** 15n
   network.proverTip = 400n * 10n ** 15n
 })
 
@@ -198,13 +206,13 @@ describe("bridges quote: fees", () => {
       for (const faster of [false, true]) {
         const quote = await quoteOf({ amount: "50", chain: "base", via, faster })
         expect(quote.releaseTip).toBe(WITHDRAW_RELAYER_TIP)
-        expect(quote.fpcFundingCut).toBe(network.fpcFundingCut)
+        expect(quote.withdrawalFee).toBe(network.withdrawalFee)
         expect(quote.proverTip).toBe(faster ? network.proverTip : 0n)
         // The run's floor plus the wallet's 10% margin.
         expect(quote.escrowTip).toBe(880n * 10n ** 15n)
         expect(
           quote.releaseTip +
-            quote.fpcFundingCut +
+            quote.withdrawalFee +
             quote.proverTip +
             quote.escrowTip +
             quote.swapInput,
@@ -269,7 +277,7 @@ describe("bridges quote: fees", () => {
     expect(facts[0]).toEqual(["Quoted", "2026-10-08 18:02:11 UTC"])
     expect(facts.find(([l]) => l === "Spend")?.[1]).toBe("50.0000 DAI, fees included")
     expect(item("Release tip")?.[0]).toBe("0.1000 DAI")
-    expect(item("Portal cut")?.[0]).toBe("0.1000 DAI")
+    expect(item("Executor fee")?.[0]).toBe("0.1000 DAI")
     expect(item("Prover tip")?.[0]).toBe("0.4000 DAI")
     expect(item("Escrow run")?.[0]).toBe("0.8800 DAI")
     expect(item("Swapped")?.[0]).toBe("48.5200 DAI")

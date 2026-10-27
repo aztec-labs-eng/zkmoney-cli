@@ -1,4 +1,4 @@
-import { Fr } from "@aztec/aztec.js/fields"
+import { Fr } from "@aztec-labs/aztec.js/fields"
 import { DEFAULT_CONTRACTS, PAYLINK_CANCEL_MARGIN_SECONDS } from "@obsidion/core/constants"
 import type { PaylinkTransaction } from "../src/frontCore.ts"
 import { encodePaylinkInline } from "@obsidion/sdk"

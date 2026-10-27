@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the zk.money packages the CLI compiles against: zkmoney-public at the pinned commit, cloned
 # into .public/, with cli/ joined to its pnpm workspace. Needs the tools zkmoney-public's README lists
-# for its contract build: pnpm 9, the Aztec 5.2.0 toolchain, Foundry and Yarn through corepack.
+# for its contract build: pnpm 9, Node.js 24.15 or later, the Aztec 6.0.0 toolchain, Foundry and Yarn through corepack.
 #
 # ZKMONEY_WALLET_DIR=<checkout> builds against a local wallet checkout instead, for changes not yet in
 # zkmoney-public. That checkout compiles its own contracts (`pnpm build-contracts`), and its
@@ -9,7 +9,7 @@
 set -eu
 
 PUBLIC_REPO=https://github.com/aztec-labs-eng/zkmoney-public.git
-PUBLIC_COMMIT=835f726063f5f3a92405e26180f510a09ea32c46
+PUBLIC_COMMIT=68757c8d0a3aee53a3f8674c89664a33d9e86efc
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 

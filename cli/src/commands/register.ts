@@ -18,6 +18,7 @@ import {
   fundRegistration,
   latestRegistration,
   loadRegistrationTerms,
+  observeDeposits,
   predictedL1Account,
   quoteForRecord,
   readRegistrationProgress,
@@ -357,6 +358,7 @@ export function registerCommand(): Command {
         }
         if (!isTerminalRegistrationPhase(record.phase)) {
           // Observes only: the registry read closes a swept record; nothing is signed here.
+          await observeDeposits(rt)
           const outcome = await resumeOxideRegistration(await resumeDeps(rt, ctx), {
             expectedRecord: { account: record.account, nameHash: record.nameHash },
           })

@@ -101,7 +101,7 @@ export interface RegistrationQuote {
   kind: RegistrationKind
   /** What to ask for. The kind's ask, or the floor when a deployment's floor outgrew it. */
   total: bigint
-  /** The least the chain accepts; absent until both the schedule and the portal's cut are known. */
+  /** The least the chain accepts; absent until the schedule is known. */
   floor?: bigint
   fee?: bigint
   /** The ask sat under the floor, so the floor is asked for instead. */
@@ -111,13 +111,10 @@ export interface RegistrationQuote {
 export function registrationQuote(
   schedule: RegistrationSchedule | undefined,
   kind: RegistrationKind,
-  fpcFundingCut: bigint | undefined,
 ): RegistrationQuote {
   const ask = REGISTRATION_ASK_DEPOSIT_TOTAL[kind]
-  if (!schedule || fpcFundingCut === undefined) {
-    return { kind, total: ask, fee: schedule?.fee, raised: false }
-  }
-  const floor = registrationFloor(schedule, fpcFundingCut)
+  if (!schedule) return { kind, total: ask, fee: undefined, raised: false }
+  const floor = registrationFloor(schedule)
   return { kind, total: floor > ask ? floor : ask, floor, fee: schedule.fee, raised: floor > ask }
 }
 

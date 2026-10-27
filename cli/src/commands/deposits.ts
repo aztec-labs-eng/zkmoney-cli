@@ -36,11 +36,7 @@ const accepts = (facts: DepositFacts) => facts.accepted.map((t) => t.symbol).joi
 
 function feeLine(facts: DepositFacts): string {
   const { symbol, decimals } = facts.token
-  return `${amount(facts.fee, decimals, symbol)} (${amount(
-    facts.sweepFee,
-    decimals,
-    symbol,
-  )} sweep + ${amount(facts.fpcFundingCut, decimals, symbol)} portal cut), taken from what is sent`
+  return `${amount(facts.fee, decimals, symbol)} sweep fee, taken from what is sent`
 }
 
 const capLine = (facts: DepositFacts) =>

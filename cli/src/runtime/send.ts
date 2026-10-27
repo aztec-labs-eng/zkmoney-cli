@@ -3,8 +3,8 @@
  * row is written before the proof and advanced in place, so a process killed mid-flight leaves a
  * pending row for the chain sync to settle; the payment record keeps the outcome under its id.
  */
-import { AztecAddress } from "@aztec/stdlib/aztec-address"
-import { TxHash, TxStatus } from "@aztec/stdlib/tx"
+import { AztecAddress } from "@aztec-labs/stdlib/aztec-address"
+import { TxHash, TxStatus } from "@aztec-labs/stdlib/tx"
 import { QueueStatus } from "@obsidion/core/constants"
 import {
   ContactStorage,

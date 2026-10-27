@@ -29,7 +29,7 @@ The full command reference, written for agents as much as for people, is [SKILL.
 
 ## Build from source
 
-Needs pnpm 9, Node.js 22, and the tools zkmoney-public lists for its contract build: the Aztec 5.2.0 toolchain (`aztec`, `aztec-nargo`), Foundry, and Yarn through corepack.
+Needs pnpm 9, Node.js 24.15 or later, and the tools zkmoney-public lists for its contract build: the Aztec 6.0.0 toolchain (`aztec`, `aztec-nargo`), Foundry, and Yarn through corepack.
 
 ```sh
 git clone https://github.com/aztec-labs-eng/zkmoney-cli && cd zkmoney-cli

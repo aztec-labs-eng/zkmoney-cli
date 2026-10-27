@@ -4,8 +4,8 @@
  * the escrow holds. The creator's history row keeps the refund material, so a cancel needs only the
  * link and the keys. Email-locked links are not handled here.
  */
-import { AztecAddress } from "@aztec/stdlib/aztec-address"
-import type { Fr } from "@aztec/aztec.js/fields"
+import { AztecAddress } from "@aztec-labs/stdlib/aztec-address"
+import type { Fr } from "@aztec-labs/aztec.js/fields"
 import { formatUnits } from "viem"
 import {
   DEFAULT_CONTRACTS,

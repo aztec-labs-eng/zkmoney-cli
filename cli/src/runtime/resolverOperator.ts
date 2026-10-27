@@ -2,7 +2,7 @@
  * The resolver operator a deployment's SIPAs route through. The SDK finds it by scanning the
  * account metadata registry's `ResolverOperatorUpdated` events from the deployment's start; when
  * that scan comes back empty on a non-mainnet network, the preferred operator the SDK's own policy
- * names is read straight from the registry and accepted if it serves the manifest's portal.
+ * names is read straight from the registry and accepted if it serves the manifest's forwarding table.
  */
 import type { Address, Hex } from "viem"
 import { readResolverOperator } from "@oxide/l1-contracts"
@@ -32,9 +32,9 @@ export function resolverOperatorRecord(rt: Runtime): Promise<SipaResolverOperato
 }
 
 async function resolve(rt: Runtime): Promise<SipaResolverOperatorRecord> {
-  const { accountMetadataRegistry, portal, resolverGatewayUrl } = rt.tuple
-  if (!accountMetadataRegistry || !portal) {
-    throw new Error("oxide manifest lacks accountMetadataRegistry or portal")
+  const { accountMetadataRegistry, forwardingTable, resolverGatewayUrl } = rt.tuple
+  if (!accountMetadataRegistry || !forwardingTable) {
+    throw new Error("oxide manifest lacks accountMetadataRegistry or forwardingTable")
   }
   const policy = resolverSelectionPolicy(rt.network)
   const scanned = await fetchSipaResolverOperators(
@@ -43,7 +43,11 @@ async function resolve(rt: Runtime): Promise<SipaResolverOperatorRecord> {
     await deploymentScanRange(rt.l1, rt.tuple),
   )
   try {
-    return selectManifestResolverOperator(scanned, { portal, resolverGatewayUrl, ...policy })
+    return selectManifestResolverOperator(scanned, {
+      forwardingTable,
+      resolverGatewayUrl,
+      ...policy,
+    })
   } catch (err) {
     if (!policy.preferredOwner) throw err
     const direct = await readResolverOperator(
@@ -56,11 +60,12 @@ async function resolve(rt: Runtime): Promise<SipaResolverOperatorRecord> {
       owner: PREFERRED_RESOLVER_OWNER,
       l2Address: direct.l2Address as Hex,
       url: direct.url,
-      oxidePortal: direct.oxidePortal as Address,
+      // The registry's slot keeps its old name; it holds the operator's ForwardingTable.
+      forwardingTable: direct.oxidePortal as Address,
       resolverPublicKey: direct.publicKey,
     }
     const chosen = selectManifestResolverOperator([record], {
-      portal,
+      forwardingTable,
       resolverGatewayUrl,
       ...policy,
     })

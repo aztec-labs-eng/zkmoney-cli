@@ -4,9 +4,9 @@
  * delivers it on the destination chain. A deposit Across cannot fill comes back to the escrow, and only the escrow's
  * recovery account can move it from there.
  */
-import { EthAddress } from "@aztec/aztec.js/addresses"
-import { Fr } from "@aztec/aztec.js/fields"
-import { AztecAddress } from "@aztec/stdlib/aztec-address"
+import { EthAddress } from "@aztec-labs/aztec.js/addresses"
+import { Fr } from "@aztec-labs/aztec.js/fields"
+import { AztecAddress } from "@aztec-labs/stdlib/aztec-address"
 import {
   DEFAULT_DECIMALS,
   L1_OPERATION_TIP_MARGIN_BPS,
@@ -18,10 +18,10 @@ import {
   findBalanceOfSlot,
   mappingSlot,
   nextOperationId,
-  readPortalWithdrawalState,
+  readExecutorSubsidy,
 } from "@obsidion/sdk"
 import {
-  WithdrawalSubsidyAbi,
+  PlainWithdrawalSubsidyAbi,
   encodeEscrowRecoverERC20,
   findEscrowExecutionTx,
 } from "@oxide/l1-contracts"
@@ -105,13 +105,14 @@ import { noteSubscribed } from "./sponsor.ts"
 import {
   currentDeployment,
   follow,
-  fpcFundingCut,
   isTerminal,
   phaseLabel,
   resolveWithdrawRecipient,
   runBurn,
   screenerFor,
   tuplePortal,
+  withdrawalExecutor,
+  withdrawalFee,
   withdrawalTracker,
   type WithdrawStage,
 } from "./withdraw.ts"
@@ -307,14 +308,16 @@ async function quoteRunTip(
   run: { factory: Address; calldata: Hex; escrow: Address; funding: bigint },
 ): Promise<bigint> {
   const dai = rt.tuple.token as Address
-  const [balanceOfSlot, ethUsdFeed] = await Promise.all([
+  const [balanceOfSlot, executor] = await Promise.all([
     findBalanceOfSlot(rt.l1 as never, dai),
-    rt.l1.readContract({
-      address: tuplePortal(rt.tuple, "withdrawalSubsidy"),
-      abi: WithdrawalSubsidyAbi,
-      functionName: "PRICE_FEED",
-    }),
+    withdrawalExecutor(rt),
   ])
+  // The executor's subsidy prices releases off the feed the relayer quotes with.
+  const ethUsdFeed = await rt.l1.readContract({
+    address: await readExecutorSubsidy(rt.l1, executor.address),
+    abi: PlainWithdrawalSubsidyAbi,
+    functionName: "PRICE_FEED",
+  })
   const quote = await quoteL1Operation(rt.l1 as never, {
     executor: tuplePortal(rt.tuple, "operationExecutor"),
     sender: SIMULATION_SENDER,
@@ -345,7 +348,8 @@ export interface BridgeQuote {
   /** DAI, 18 decimals: the burn, and every fee that comes off it before the swap. */
   amount: bigint
   releaseTip: bigint
-  fpcFundingCut: bigint
+  /** What the withdrawal executor takes. */
+  withdrawalFee: bigint
   proverTip: bigint
   /** Paid to whoever runs the escrow on Ethereum. */
   escrowTip: bigint
@@ -366,7 +370,7 @@ export interface BridgeQuote {
 interface BurnFunding {
   amount: bigint
   proverTip: bigint
-  fpcFundingCut: bigint
+  withdrawalFee: bigint
   recipient: Address
 }
 
@@ -428,7 +432,10 @@ async function quoteRoute(
     amount: burn.amount,
     withdrawalRelayerTip: WITHDRAW_RELAYER_TIP,
     proverTip: burn.proverTip,
-    fpcFundingCut: burn.fpcFundingCut,
+    plainWithdrawalExecutor: {
+      address: EthAddress.fromString(tuplePortal(rt.tuple, "plainWithdrawalExecutor")),
+      fee: burn.withdrawalFee,
+    },
     relayerTip: 0n,
   }
   const escrowFunding = checkedEscrowFunding(funding)
@@ -459,7 +466,7 @@ async function quoteRoute(
     factory,
     amount: burn.amount,
     releaseTip: WITHDRAW_RELAYER_TIP,
-    fpcFundingCut: burn.fpcFundingCut,
+    withdrawalFee: burn.withdrawalFee,
     proverTip: burn.proverTip,
     escrowTip,
     swapInput: escrowFunding - escrowTip,
@@ -535,7 +542,7 @@ export async function quoteBridge(
   routes: BridgeRoute[],
   burn: BurnFunding,
 ): Promise<BridgeQuote> {
-  const withdrawalFees = WITHDRAW_RELAYER_TIP + burn.fpcFundingCut + burn.proverTip
+  const withdrawalFees = WITHDRAW_RELAYER_TIP + burn.withdrawalFee + burn.proverTip
   if (burn.amount <= withdrawalFees)
     fail(`${dai(burn.amount)} does not cover the withdrawal fees of ${dai(withdrawalFees)}`, LARGER)
   const settled = await Promise.allSettled(routes.map((route) => quoteRoute(rt, route, burn)))
@@ -606,8 +613,8 @@ export async function quoteBridgeTransfer(
       "a quote takes the address itself and reads no contacts",
     )
   const recipient = getAddress(to)
-  const [cut, estimate] = await Promise.all([
-    fpcFundingCut(rt),
+  const [fee, estimate] = await Promise.all([
+    withdrawalFee(rt),
     quoteFasterProof(rt).then<ProofEstimate, ProofEstimate>(
       (proof) => ({ proof }),
       (error: unknown) => ({ error }),
@@ -617,7 +624,7 @@ export async function quoteBridgeTransfer(
   const quote = await quoteBridge(rt, routes, {
     amount,
     proverTip: input.faster && estimate.proof ? estimate.proof.proverTip : 0n,
-    fpcFundingCut: cut,
+    withdrawalFee: fee,
     recipient,
   })
   return {
@@ -672,7 +679,7 @@ export function quoteSummary(
         inDai(quote.releaseTip),
         "withdrawal fee, to the relayer that releases the burn",
       ],
-      ["Portal cut", inDai(quote.fpcFundingCut), "withdrawal fee, the portal's funding cut"],
+      ["Executor fee", inDai(quote.withdrawalFee), "withdrawal fee, what the executor keeps"],
       ...(quote.proverTip
         ? [["Prover tip", inDai(quote.proverTip), "--faster, for an early proof"]]
         : []),
@@ -816,11 +823,11 @@ export async function bridge(
   if (!verdict.compliant) fail(verdict.reason?.message ?? "this address cannot receive withdrawals")
   const faster = input.faster ? await quoteFasterProof(rt) : undefined
   const proverTip = faster?.proverTip ?? 0n
-  const cut = await fpcFundingCut(rt)
+  const fee = await withdrawalFee(rt)
   const quote = await quoteBridge(rt, routes, {
     amount: amount.atomic,
     proverTip,
-    fpcFundingCut: cut,
+    withdrawalFee: fee,
     recipient: recipient.address,
   })
   const balance = await tokenService.getBalance()
@@ -844,13 +851,14 @@ export async function bridge(
       ),
       dai: EthAddress.fromString(rt.tuple.token),
       from: account.getAddress(),
-      plainWithdrawalExecutor: EthAddress.fromString(
-        tuplePortal(rt.tuple, "plainWithdrawalExecutor"),
-      ),
+      plainWithdrawalExecutor: {
+        address: EthAddress.fromString(tuplePortal(rt.tuple, "plainWithdrawalExecutor")),
+        fee,
+      },
       amount: amount.atomic,
       withdrawalRelayerTip: WITHDRAW_RELAYER_TIP,
       proverTip,
-      fpcFundingCut: cut,
+      portal: EthAddress.fromString(tuplePortal(rt.tuple, "portal")),
       recoveryAccount: EthAddress.fromString(await recoveryAccountOf(rt)),
       relayerTip: quote.escrowTip,
       nonce,
@@ -883,7 +891,6 @@ export async function bridge(
       fail(`the ${BRIDGE_NAMES[quote.route.bridge]} escrow factory predicts another escrow`)
     const userPayload = built.operation.userPayload
     const scanFrom = (await rt.l1.getBlockNumber()).toString()
-    const portal = await readPortalWithdrawalState(rt.l1 as never, rt.tuple.portal as Address)
     const operationId = nextOperationId("withdraw")
     const { record, mined } = await runBurn(rt, {
       operationId,
@@ -894,8 +901,9 @@ export async function bridge(
         rawAmount: amount.atomic.toString(),
         relayerTip: WITHDRAW_RELAYER_TIP.toString(),
         proverTip: proverTip.toString(),
-        fpcFundingCut: cut.toString(),
+        withdrawalFee: fee.toString(),
         tokenSymbol: token.symbol,
+        tokenDecimals: token.decimals,
         phase: "submitting",
         startTime: Date.now(),
         deployment: currentDeployment(rt),
@@ -913,8 +921,13 @@ export async function bridge(
             proverTip,
             withdrawal: {
               tuple: rt.tuple,
-              portal,
-              escrow: { escrow: built.escrow, userPayload, l1Operation: built.l1Operation },
+              l1: rt.l1,
+              escrow: {
+                escrow: built.escrow,
+                userPayload,
+                l1Operation: built.l1Operation,
+                withdrawalFee: fee,
+              },
             },
           },
         )
