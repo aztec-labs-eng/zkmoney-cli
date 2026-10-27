@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { TxExecutionResult, TxStatus } from "@aztec/stdlib/tx"
+import { TxExecutionResult, TxStatus } from "@aztec-labs/stdlib/tx"
 import type { Contact } from "../src/frontCore.ts"
 import { afterEach, describe, expect, it } from "vitest"
 import { CliError } from "../src/output.ts"

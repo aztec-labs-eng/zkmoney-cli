@@ -18,17 +18,17 @@ import {
 } from "@obsidion/config-client"
 import type { ContractServiceConfig, OxideEnvProfile } from "@obsidion/core/types"
 
-const STAGING = "https://cdn.staging.zk.money/profiles/v5/current.json"
+const STAGING = "https://cdn.staging.zk.money/profiles/v6/current.json"
 
 /**
  * The profiles the CLI knows by name, the network each runs on, and with `dir` a directory of its own when it shares
  * its network with another profile. `testnet` is staging's other name; dev runs on staging's network.
  */
 export const PROFILES: Record<string, { url: string; network: string; dir?: string }> = {
-  mainnet: { url: "https://cdn.zk.money/profiles/v5/current.json", network: "mainnet" },
+  mainnet: { url: "https://cdn.zk.money/profiles/v6/current.json", network: "mainnet" },
   staging: { url: STAGING, network: "testnet" },
   testnet: { url: STAGING, network: "testnet" },
-  dev: { url: "https://cdn.dev.zk.money/profiles/v5/current.json", network: "testnet", dir: "dev" },
+  dev: { url: "https://cdn.dev.zk.money/profiles/v6/current.json", network: "testnet", dir: "dev" },
   sandbox: { url: "http://localhost:8083/profiles/sandbox.json", network: "sandbox" },
 }
 
@@ -194,8 +194,12 @@ export interface Flags {
 export interface CliConfig {
   home: string
   network: string
-  /** Where under `home` this profile's account, store and settings live. */
+  /** Where under `home` this profile's account and settings live. */
   dir: string
+  /** The rollup the profile is scoped to; another rollup derives other addresses for the same keys. */
+  rollupVersion: string
+  /** Where under `home` this rollup's PXE and records live: a new rollup starts them afresh. */
+  rollupDir: string
   profileId: string
   /** The profile version in force, and the pin of its reviewed contract artifacts. */
   versionId: string
@@ -279,6 +283,8 @@ export async function loadConfig(flags: Flags = {}, fetchImpl?: typeof fetch): P
     home,
     network,
     dir,
+    rollupVersion: profile.shared.rollupVersion,
+    rollupDir: join(dir, `rollup-${profile.shared.rollupVersion}`),
     profileId: profile.profileId,
     versionId: resolvedVersionId,
     artifactManifestSha256: version.artifactManifestSha256,

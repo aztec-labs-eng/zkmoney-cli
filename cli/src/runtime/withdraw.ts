@@ -5,9 +5,8 @@
  * reads, on this run or a later one. With screening configured, the recipient is screened first, as
  * the relayer screens it again at batching time: a blocked address there is a burn that never releases.
  */
-import { EthAddress } from "@aztec/aztec.js/addresses"
-import { Fr } from "@aztec/aztec.js/fields"
-import { TxHash } from "@aztec/stdlib/tx"
+import { EthAddress } from "@aztec-labs/aztec.js/addresses"
+import { Fr } from "@aztec-labs/aztec.js/fields"
 import { formatUnits, getAddress, isAddress, type Address, type Hex } from "viem"
 import { DEFAULT_DECIMALS, WITHDRAW_RELAYER_TIP } from "@obsidion/core/constants"
 import type { OxideEnvTuple } from "@obsidion/core/types"
@@ -16,13 +15,13 @@ import {
   L1WithdrawalFinalizationReader,
   SwapOnWithdrawSimulator,
   SwapTipExceedsInputError,
-  fetchWithdrawalsWithIds,
+  assertExecutorServesPortal,
   nextOperationId,
   planSwapOnWithdraw,
-  readFpcFundingCut,
-  readPortalWithdrawalState,
+  readWithdrawalExecutor,
   type SwapOnWithdrawOutput,
   type SwapOnWithdrawPlan,
+  type WithdrawalExecutor,
   type WithdrawalOptions,
 } from "@obsidion/sdk"
 import {
@@ -107,7 +106,7 @@ export function screenerFor(rt: Runtime): AddressScreener {
 
 /** The oxide-rails coordinates a burn settles against; a manifest without them has no exit. */
 export function withdrawalWiring(rt: Runtime): WithdrawalWiring {
-  const wiring = resolveWithdrawalWiring(rt.tuple, BigInt(rt.config.l1ChainId))
+  const wiring = resolveWithdrawalWiring(rt.tuple)
   if (!wiring) fail("this deployment's manifest carries no withdrawal rails")
   return wiring
 }
@@ -122,19 +121,27 @@ export const tuplePortal = (tuple: OxideEnvTuple, field: keyof OxideEnvTuple): A
   return value as Address
 }
 
-const cuts = new Map<string, Promise<bigint>>()
+const executors = new Map<string, Promise<WithdrawalExecutor>>()
 
-/** The portal's funding cut, an immutable read once per portal. */
-export function fpcFundingCut(rt: Pick<Runtime, "tuple" | "l1">): Promise<bigint> {
-  const portal = tuplePortal(rt.tuple, "portal")
-  let cut = cuts.get(portal.toLowerCase())
-  if (!cut) {
-    cut = readFpcFundingCut(rt.l1 as never, portal)
-    cuts.set(portal.toLowerCase(), cut)
-    cut.catch(() => cuts.delete(portal.toLowerCase()))
+/** The executor a burn pays, checked to serve the portal: immutables, read once per executor. */
+export function withdrawalExecutor(rt: Pick<Runtime, "tuple" | "l1">): Promise<WithdrawalExecutor> {
+  const address = tuplePortal(rt.tuple, "plainWithdrawalExecutor")
+  const key = address.toLowerCase()
+  let executor = executors.get(key)
+  if (!executor) {
+    executor = readWithdrawalExecutor(rt.l1, address, "plain").then((read) => {
+      assertExecutorServesPortal(read, tuplePortal(rt.tuple, "portal"))
+      return read
+    })
+    executors.set(key, executor)
+    executor.catch(() => executors.delete(key))
   }
-  return cut
+  return executor
 }
+
+/** What the executor takes from each withdrawal, before the relayer tip. */
+export const withdrawalFee = async (rt: Pick<Runtime, "tuple" | "l1">): Promise<bigint> =>
+  (await withdrawalExecutor(rt)).fee
 
 const trackers = new WeakMap<Runtime, Promise<WithdrawalTrackingService>>()
 
@@ -151,7 +158,7 @@ export function withdrawalTracker(rt: Runtime): Promise<WithdrawalTrackingServic
         store: WithdrawalStorage.get(rt.storage),
         node: rt.node,
         finalizationReader: readerFor(wiring),
-        portalContext: wiring.portalContext,
+        deployment: { portal: wiring.portal, l2Token: wiring.l2Token },
         readerForDeployment: readerFor,
         swapEscrowReader: new L1SwapEscrowReader(client, { dai: tuplePortal(rt.tuple, "token") }),
       })
@@ -195,7 +202,8 @@ export async function resolveWithdrawRecipient(
 
 export interface WithdrawalFee {
   withdrawalRelayerTip: bigint
-  fpcFundingCut: bigint
+  /** What the withdrawal executor takes. */
+  withdrawalFee: bigint
   /** Zero on the direct route. */
   swapRelayerTip: bigint
   /** Every deduction summed: what an amount has to clear to leave anything behind. */
@@ -216,7 +224,7 @@ export interface WithdrawalQuote {
 }
 
 /**
- * What a route costs. The direct route is the tip plus the portal's cut; a swap route also
+ * What a route costs. The direct route is the tip plus the executor's fee; a swap route also
  * simulates the relayer's run and prices its tip off that, so the quote is the one the escrow
  * commits to. A prover tip comes out of the burn before the swap sees it.
  */
@@ -227,24 +235,24 @@ export async function quoteWithdrawal(
   recipient: Address,
   proverTip = 0n,
 ): Promise<WithdrawalQuote> {
-  const cut = await fpcFundingCut(rt)
+  const executorFee = await withdrawalFee(rt)
   if (asset === "DAI") {
     return {
       asset,
       fee: {
         withdrawalRelayerTip: WITHDRAW_RELAYER_TIP,
-        fpcFundingCut: cut,
+        withdrawalFee: executorFee,
         swapRelayerTip: 0n,
-        floorAtomic: WITHDRAW_RELAYER_TIP + cut,
+        floorAtomic: WITHDRAW_RELAYER_TIP + executorFee,
       },
     }
   }
   if (!rt.tuple.swapEscrowFactoryV2)
     fail(`${asset} withdrawals are not available on ${rt.network}`, "withdraw DAI instead")
-  if (amountAtomic <= WITHDRAW_RELAYER_TIP + cut + proverTip)
+  if (amountAtomic <= WITHDRAW_RELAYER_TIP + executorFee + proverTip)
     fail(
       `the amount does not cover the withdrawal fee of ${formatAmount(
-        WITHDRAW_RELAYER_TIP + cut + proverTip,
+        WITHDRAW_RELAYER_TIP + executorFee + proverTip,
         DEFAULT_DECIMALS,
         "DAI",
       )}`,
@@ -256,15 +264,19 @@ export async function quoteWithdrawal(
   })
   const fee = (tip: bigint): WithdrawalFee => ({
     withdrawalRelayerTip: WITHDRAW_RELAYER_TIP,
-    fpcFundingCut: cut,
+    withdrawalFee: executorFee,
     swapRelayerTip: tip,
-    floorAtomic: WITHDRAW_RELAYER_TIP + cut + tip,
+    floorAtomic: WITHDRAW_RELAYER_TIP + executorFee + tip,
   })
   try {
     const simulation = await simulator.simulate({
       output: asset,
       amount: amountAtomic,
-      deductions: { withdrawalRelayerTip: WITHDRAW_RELAYER_TIP, proverTip, fpcFundingCut: cut },
+      deductions: {
+        withdrawalRelayerTip: WITHDRAW_RELAYER_TIP,
+        proverTip,
+        withdrawalFee: executorFee,
+      },
       recipient,
     })
     return {
@@ -313,7 +325,7 @@ export async function planSwapLeg(
     amount: amountAtomic,
     withdrawalRelayerTip: WITHDRAW_RELAYER_TIP,
     proverTip,
-    fpcFundingCut: await fpcFundingCut(rt),
+    withdrawalFee: await withdrawalFee(rt),
     relayerTip: quote.swap.relayerTip,
     recovery: {
       account: account as Address,
@@ -324,10 +336,9 @@ export async function planSwapLeg(
   return { output: quote.asset, plan, factory }
 }
 
-/** How a burn settles: the deployment, the portal's state for the sdk's tip check, and the swap leg. */
-export async function withdrawalOptions(rt: Runtime, swap?: SwapLeg): Promise<WithdrawalOptions> {
-  const portal = await readPortalWithdrawalState(rt.l1 as never, tuplePortal(rt.tuple, "portal"))
-  return { tuple: rt.tuple, portal, ...(swap ? { swap: { ...swap.plan, l1: rt.l1 } } : {}) }
+/** How a burn settles: the deployment, the L1 client the sdk reads the executor's fee with, and the swap leg. */
+export function withdrawalOptions(rt: Runtime, swap?: SwapLeg): WithdrawalOptions {
+  return { tuple: rt.tuple, l1: rt.l1, ...(swap ? { swap: swap.plan } : {}) }
 }
 
 function swapRecordFields(
@@ -346,16 +357,6 @@ function swapRecordFields(
     swapEstimatedOut: quote?.amountOut.toString(),
     swapOutputDecimals: quote?.decimals,
   }
-}
-
-/** The withdrawal a burn published, read from its tx effect: the amount and tip as the chain has them. */
-async function publishedBurn(rt: Runtime, l2TxHash: string) {
-  const { withdrawals } = await fetchWithdrawalsWithIds(
-    rt.node,
-    TxHash.fromString(l2TxHash),
-    withdrawalWiring(rt).portalContext,
-  )
-  return withdrawals[0]
 }
 
 export interface BurnResult {
@@ -398,16 +399,9 @@ export async function runBurn(
   } finally {
     await submission.stop()
   }
-  const published = await publishedBurn(rt, result.txHash).catch(() => undefined)
   let mined: WithdrawalRecord
   try {
-    mined = await store.markMined(
-      localId,
-      result.txHash,
-      result.blockNumber,
-      published?.amount.toString() ?? record.rawAmount ?? "0",
-      published?.relayerTip.toString() ?? record.relayerTip,
-    )
+    mined = await store.markMined(localId, result.txHash, result.blockNumber)
   } catch {
     // Mined but not recorded as such: the tracker picks it up from the stamped hash.
     return { record: store.get(localId) ?? record, mined: true }
@@ -513,7 +507,7 @@ export async function withdraw(
     const exit = {
       l1Recipient: EthAddress.fromString(withdrawalRecipients(seed).release),
       amount: amount.atomic.toString(),
-      withdrawal: await withdrawalOptions(rt, swap),
+      withdrawal: withdrawalOptions(rt, swap),
     }
     const operationId = nextOperationId("withdraw")
     const { record, mined } = await runBurn(rt, {
@@ -526,8 +520,9 @@ export async function withdraw(
         rawAmount: amount.atomic.toString(),
         relayerTip: WITHDRAW_RELAYER_TIP.toString(),
         proverTip: proverTip.toString(),
-        fpcFundingCut: quote.fee.fpcFundingCut.toString(),
+        withdrawalFee: quote.fee.withdrawalFee.toString(),
         tokenSymbol: token.symbol,
+        tokenDecimals: token.decimals,
         phase: "submitting",
         startTime: Date.now(),
         deployment: currentDeployment(rt),

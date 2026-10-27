@@ -227,7 +227,7 @@ run("find", [
   ")",
   "-delete",
 ])
-if (readdirSync(join(nodeModules, "@aztec/bb.js/build")).length < Object.keys(TARGETS).length)
+if (readdirSync(join(nodeModules, "@aztec-foundation/bb.js/build")).length < Object.keys(TARGETS).length)
   throw new Error("bb.js is missing prover builds for some targets")
 
 // npm's reading of a package's os, cpu or libc list: `!x` rules x out, plain entries allow only themselves.
@@ -265,9 +265,9 @@ for (const [label, target] of Object.entries(TARGETS)) {
   cpSync(stage, dir, { recursive: true })
   const modules = join(dir, "zkmoney/node_modules")
   dropForeign(modules, target)
-  for (const build of readdirSync(join(modules, "@aztec/bb.js/build"))) {
+  for (const build of readdirSync(join(modules, "@aztec-foundation/bb.js/build"))) {
     if (build !== target.bb)
-      rmSync(join(modules, "@aztec/bb.js/build", build), { recursive: true, force: true })
+      rmSync(join(modules, "@aztec-foundation/bb.js/build", build), { recursive: true, force: true })
   }
   run("tar", ["-czf", `${dirName}.tar.gz`, dirName], outRoot)
   rmSync(dir, { recursive: true, force: true })

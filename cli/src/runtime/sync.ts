@@ -71,7 +71,14 @@ export async function openSync(rt: Runtime): Promise<SyncHandle> {
   const tag = (await rt.account()).unlocked.file.identity?.tag
   const coordinator = new WalletSyncCoordinator({
     source: createWalletSyncSource({
-      readBalance: () => tokenService.readBalanceAssumingSynced(),
+      readBalances: async () => ({
+        balances: { [token.address]: await tokenService.readBalanceAssumingSynced() },
+        readAt: { [token.address]: Date.now() },
+      }),
+      // The token's immutables are stored before the first event read runs its sync.
+      prepareToken: async () => {
+        await tokenService.getTokenContract()
+      },
       wallet: rt.wallet,
       tokenAddress: token.address,
       accountAddress: account.getAddress().toString(),

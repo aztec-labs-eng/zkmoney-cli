@@ -55,37 +55,36 @@ describe("signedSchedule", () => {
 
 describe("registrationQuote", () => {
   const schedule = { fee: dai(3), min: dai(2) }
-  const cut = dai(1)
 
   it("asks the kind's figure with the floor beside it", () => {
-    const quote = registrationQuote(schedule, "standard", cut)
+    const quote = registrationQuote(schedule, "standard")
     expect(quote.total).toBe(REGISTRATION_ASK_DEPOSIT_TOTAL.standard)
-    expect(quote.floor).toBe(registrationFloor(schedule, cut))
+    expect(quote.floor).toBe(registrationFloor(schedule))
     expect(quote.fee).toBe(dai(3))
     expect(quote.raised).toBe(false)
   })
 
   it("asks less for an earned tag", () => {
-    const quote = registrationQuote(schedule, "earned_tag", cut)
+    const cheap = { fee: dai(3) / 10n, min: dai(2) / 10n }
+    const quote = registrationQuote(cheap, "earned_tag")
     expect(quote.total).toBe(REGISTRATION_ASK_DEPOSIT_TOTAL.earned_tag)
     expect(quote.total).toBeLessThan(REGISTRATION_ASK_DEPOSIT_TOTAL.standard)
   })
 
   it("asks the floor when the deployment's floor outgrew the ask", () => {
     const steep = { fee: dai(20), min: dai(10) }
-    const quote = registrationQuote(steep, "standard", cut)
-    expect(quote.total).toBe(registrationFloor(steep, cut))
+    const quote = registrationQuote(steep, "standard")
+    expect(quote.total).toBe(registrationFloor(steep))
     expect(quote.raised).toBe(true)
   })
 
-  it("knows no floor until the schedule and the cut are read", () => {
-    expect(registrationQuote(undefined, "standard", cut)).toEqual({
+  it("knows no floor until the schedule is read", () => {
+    expect(registrationQuote(undefined, "standard")).toEqual({
       kind: "standard",
       total: REGISTRATION_ASK_DEPOSIT_TOTAL.standard,
       fee: undefined,
       raised: false,
     })
-    expect(registrationQuote(schedule, "standard", undefined).floor).toBeUndefined()
   })
 
   it("names the kind from the reduced flag alone", () => {

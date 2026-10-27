@@ -7,9 +7,9 @@
  * web session takes from the browser (passkey, storage, sponsor, L1 client) comes here from the
  * CLI runtime.
  */
-import { NO_FROM } from "@aztec/aztec.js/account"
-import { Fr } from "@aztec/aztec.js/fields"
-import { AztecAddress } from "@aztec/stdlib/aztec-address"
+import { NO_FROM } from "@aztec-labs/aztec.js/account"
+import { Fr } from "@aztec-labs/aztec.js/fields"
+import { AztecAddress } from "@aztec-labs/stdlib/aztec-address"
 import {
   bytesToHex,
   createWalletClient,
@@ -37,13 +37,13 @@ import {
   createOxideL1Reader,
   createRegistrationDepositReader,
   createRegistrationSipaDeriver,
+  deploymentSipaRoute,
   deriveBootstrapKey,
   isTerminalRegistrationPhase,
   matchWireNameHash,
   pubkeyToR1KeyArg,
   rebuildRegistrationBroadcast,
   recordRegistrationBroadcastSent,
-  registrationSipaImplementation,
   resumeOxideRegistration,
   retryDelay,
   setActiveNetworkId,
@@ -79,9 +79,7 @@ import {
   ensureContractRegisteredInPXE,
   fetchSipaEvents,
   getBroadcasterArtifact,
-  readFpcFundingCut,
   readNameClaimLog,
-  readSweepEvents,
   type WebAuthnAlphaAuthProvider,
 } from "@obsidion/sdk"
 import type { Runtime } from "./boot.ts"
@@ -107,7 +105,7 @@ import {
   type TokenBalance,
 } from "./registrationQuote.ts"
 import { sipaFundingTokens } from "./depositFacts.ts"
-import { sipaDeployed } from "./deposits.ts"
+import { sipaDeployed, sweepRoutes, syncDeposits } from "./deposits.ts"
 import { providerFor } from "../keystore/authenticator.ts"
 import { readAccountFile, rememberIdentity } from "../keystore/keystore.ts"
 import { CliError, fail, note, time } from "../output.ts"
@@ -194,12 +192,10 @@ export interface RegistrationContext {
   portal: Address
   feeToken: SipaFundingToken
   fundingTokens: [SipaFundingToken, ...SipaFundingToken[]]
-  fpcFundingCut: bigint
   /** The controller's immutable schedule: what a claim without signed terms pays. */
   schedule: RegistrationSchedule
   /** The controller when the deployment has one, else the registry, which then holds the schedule. */
   scheduleSource: Address
-  registrationImplementation: Address
   pending: PendingRegistrationStore
 }
 
@@ -212,24 +208,20 @@ export async function registrationContext(rt: Runtime): Promise<RegistrationCont
     controller && !isAllZeroHex(controller) ? controller : env.registry
   ) as Address
   const token = env.feeToken
-  const [symbol, decimals, fpcFundingCut, min, fee, registrationImplementation] = await Promise.all(
-    [
-      rt.l1.readContract({ address: token, abi: erc20Abi, functionName: "symbol" }),
-      rt.l1.readContract({ address: token, abi: erc20Abi, functionName: "decimals" }),
-      readFpcFundingCut(rt.l1 as never, portal),
-      rt.l1.readContract({
-        address: scheduleSource,
-        abi: SCHEDULE_ABI,
-        functionName: "REGISTRATION_MIN",
-      }),
-      rt.l1.readContract({
-        address: scheduleSource,
-        abi: SCHEDULE_ABI,
-        functionName: "REGISTRATION_FEE",
-      }),
-      registrationSipaImplementation(rt.l1 as never, sipaFactory, portal),
-    ],
-  )
+  const [symbol, decimals, min, fee] = await Promise.all([
+    rt.l1.readContract({ address: token, abi: erc20Abi, functionName: "symbol" }),
+    rt.l1.readContract({ address: token, abi: erc20Abi, functionName: "decimals" }),
+    rt.l1.readContract({
+      address: scheduleSource,
+      abi: SCHEDULE_ABI,
+      functionName: "REGISTRATION_MIN",
+    }),
+    rt.l1.readContract({
+      address: scheduleSource,
+      abi: SCHEDULE_ABI,
+      functionName: "REGISTRATION_FEE",
+    }),
+  ])
   const feeToken: SipaFundingToken = { address: token, symbol, decimals }
   const pending = PendingRegistrationStore.get(rt.storage)
   await pending.load()
@@ -239,10 +231,8 @@ export async function registrationContext(rt: Runtime): Promise<RegistrationCont
     portal,
     feeToken,
     fundingTokens: sipaFundingTokens(rt.network, feeToken),
-    fpcFundingCut,
     schedule: { min, fee },
     scheduleSource,
-    registrationImplementation,
     pending,
   }
 }
@@ -306,7 +296,6 @@ export function quoteForRecord(
   return registrationQuote(
     scheduleForRecord(record, terms, ctx.schedule),
     registrationKind(terms?.reduced),
-    ctx.fpcFundingCut,
   )
 }
 
@@ -347,11 +336,13 @@ export function registrationBroadcaster(
   return async (payload, attempt = {}) => {
     const tuple = rt.tuple
     const address = keys.account.getAddress()
+    const routes = await sweepRoutes(rt, "registration")
     const deployed = await sipaDeployed(rt, {
       sipa: payload.sipaAddress,
       intent: OxideSipaIntent.Registration,
       deployArgs: payload.sipaArgs,
       intentData: payload.registrationData,
+      routes,
     })
     await nameClaims(rt).put({
       address: address.toString(),
@@ -396,9 +387,8 @@ export function registrationBroadcaster(
         r1Install: payload.r1Install,
       }),
       operationExecutor: need(tuple.operationExecutor, "operationExecutor") as Address,
-      depositSubsidy: need(tuple.depositSubsidy, "depositSubsidy") as Address,
       chainId: BigInt(rt.config.l1ChainId),
-      tokens: ctx.fundingTokens.map((t) => t.address),
+      routes,
     })
     const innerCalls = (await Promise.all(interactions.map((call) => call.request()))).flatMap(
       (p) => p.calls,
@@ -520,7 +510,6 @@ async function signDepsFor(
       publicClient: rt.l1,
       env: ctx.env,
       tuple: rt.tuple,
-      network: rt.network,
     }),
     seedSipaDeposit: depositSeeder(rt, ctx.env),
   }
@@ -610,6 +599,36 @@ function reportingFailure<A extends unknown[], R>(what: string, fn: (...args: A)
   }
 }
 
+/**
+ * front-core's reader over the deposit rail's records, which the deposit sync keeps current: a
+ * registration address's funding and sweeps are what that sync last observed, not a live L1 read.
+ */
+function registrationDepositReader(
+  rt: Runtime,
+  ctx: RegistrationContext,
+  termsFor?: (account: string) => { fee: bigint; minDeposit: bigint } | undefined,
+) {
+  return createRegistrationDepositReader({
+    publicClient: rt.l1,
+    registrationRoute: deploymentSipaRoute(rt.tuple, OxideSipaIntent.Registration),
+    registry: ctx.env.registry,
+    registrationController: ctx.scheduleSource,
+    store: SIPADepositStore.get(rt.storage),
+    termsFor,
+  })
+}
+
+/**
+ * One pass of the deposit rail's observation, which is where a registration tick reads the
+ * address's funding and sweeps from. A pass that fails leaves the records as they were.
+ */
+export async function observeDeposits(rt: Runtime): Promise<void> {
+  await syncDeposits(rt).catch((err) => {
+    if (process.env.ZKMONEY_DEBUG)
+      note(`note: deposit observation failed: ${(err as Error).message}`)
+  })
+}
+
 /** The resume machine's collaborators. A tick only observes; the register command publishes. */
 export async function resumeDeps(rt: Runtime, ctx: RegistrationContext): Promise<OxideResumeDeps> {
   // `termsFor` is synchronous, so the stored terms are read up front for every record.
@@ -621,21 +640,13 @@ export async function resumeDeps(rt: Runtime, ctx: RegistrationContext): Promise
   return {
     env: ctx.env,
     l1: ctx.l1,
-    deposits: createRegistrationDepositReader({
-      publicClient: rt.l1,
-      registrationImplementation: ctx.registrationImplementation,
-      registry: ctx.env.registry,
-      portal: ctx.portal,
-      registrationController: ctx.scheduleSource,
-      fundingTokens: ctx.fundingTokens,
-      termsFor: (account) => {
-        const stored = terms.get(account.toLowerCase())
-        const record = ctx.pending.get(account)
-        const schedule = signedSchedule(stored)
-        return schedule && (record?.fee === undefined || schedule.fee === BigInt(record.fee))
-          ? { fee: schedule.fee, minDeposit: schedule.min }
-          : undefined
-      },
+    deposits: registrationDepositReader(rt, ctx, (account) => {
+      const stored = terms.get(account.toLowerCase())
+      const record = ctx.pending.get(account)
+      const schedule = signedSchedule(stored)
+      return schedule && (record?.fee === undefined || schedule.fee === BigInt(record.fee))
+        ? { fee: schedule.fee, minDeposit: schedule.min }
+        : undefined
     }),
     pendingStore: ctx.pending,
     resolveLocalTag: localTagResolver(rt, ctx),
@@ -751,7 +762,7 @@ export async function readRegistrationProgress(
         }),
       })),
     ),
-    readSweepEvents(rt.l1 as never, sipa),
+    registrationDepositReader(rt, ctx).readSweeps(sipa),
     ctx.l1.readUserAddress(ctx.env.registry, record.nameHash),
     loadRegistrationTerms(rt, record.account, record.tag),
   ])
@@ -767,7 +778,7 @@ export async function readRegistrationProgress(
     balances,
     swept: sweeps.length > 0,
     registered,
-    floor: schedule ? registrationFloor(schedule, ctx.fpcFundingCut) : undefined,
+    floor: schedule ? registrationFloor(schedule) : undefined,
     terms,
   }
 }
@@ -809,6 +820,7 @@ export async function waitForRegistration(
   let lastBroadcast = record.broadcast
   let lastSwept = record.sweptAt !== undefined
   for (;;) {
+    await observeDeposits(rt)
     const outcome = await resumeOxideRegistration(deps, { expectedRecord: expected })
     await opts.publish(ctx.pending.get(record.account) ?? record)
     const current = ctx.pending.get(record.account) ?? record

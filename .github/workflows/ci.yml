@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 env:
-  AZTEC_VERSION: 5.2.0
+  AZTEC_VERSION: 6.0.0
 
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
 
       - run: corepack enable
 

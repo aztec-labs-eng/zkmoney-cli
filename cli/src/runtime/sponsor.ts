@@ -3,13 +3,12 @@
  * sponsor context: which FPC instance, which rail, and, until the account holds that rail's
  * subscription note, the witness its gate takes. The NameClaim gate takes the domain owner's L1
  * claim (rebuilt from the registry's `NameClaimed` log); the registration gate takes the NamePortal
- * message the registration sweep emitted, found by scanning the Inbox. Both bind the L2 address with
- * a signature from the master secret's bootstrap key, so nothing here needs a stored secret beyond
- * the account itself.
+ * message the registration sweep emitted, found by scanning the Inbox. Both prove the master
+ * secret's bootstrap key, so nothing here needs a stored secret beyond the account itself.
  */
-import { EthAddress } from "@aztec/aztec.js/addresses"
-import { Fr } from "@aztec/aztec.js/fields"
-import { AztecAddress } from "@aztec/stdlib/aztec-address"
+import { EthAddress } from "@aztec-labs/aztec.js/addresses"
+import { Fr } from "@aztec-labs/aztec.js/fields"
+import { AztecAddress } from "@aztec-labs/stdlib/aztec-address"
 import { concatHex, keccak256, toBytes, toHex, type Address, type Hex } from "viem"
 import { DEFAULT_CONTRACTS, L2_BINDING_MESSAGE_PREFIX } from "@obsidion/core/constants"
 import {
@@ -17,6 +16,7 @@ import {
   composeWireNameHash,
   createOxideL1Reader,
   deriveBootstrapKey,
+  deriveBootstrapScalar,
   requireVerifiedIdentity,
   resolveOxideAccountFactory,
   resolveOxideIdentity,
@@ -28,7 +28,7 @@ import {
 } from "../frontCore.ts"
 import {
   KIND_BY_ADDRESS,
-  REGISTRATION_MESSAGE_SECRET,
+  bootstrapKeyProof,
   claimFpcPolicySponsorsAnyCall,
   findRegistrationMessage,
   hasClaimFpcSubscription,
@@ -227,7 +227,9 @@ async function nameClaimGate(
 }
 
 export type RegistrationPending =
-  { pending: "message" } | { pending: "import"; messageHash: Fr } | { pending: "note" }
+  | { pending: "message" }
+  | { pending: "import"; messageHash: Fr }
+  | { pending: "note" }
 
 export class RegistrationPendingError extends Error {
   constructor(readonly state: RegistrationPending) {
@@ -257,7 +259,7 @@ async function registrationGate(
     {
       fpc: AztecAddress.fromStringUnsafe(generation.fpcAddress),
       namePortal: EthAddress.fromString(generation.namePortal),
-      owner: EthAddress.fromString(identity.account),
+      bootstrap: EthAddress.fromString(deriveBootstrapKey(keys.secretKey).address),
       nameHash: Buffer.from(identity.nameHash.replace(/^0x/, ""), "hex"),
       rollupVersion: info.rollupVersion,
       l1ChainId: rt.config.l1ChainId,
@@ -265,12 +267,11 @@ async function registrationGate(
   )
   if (!message) return { pending: "message" }
   if (message.status === "pending") return { pending: "import", messageHash: message.messageHash }
-  if (message.status === "consumed") return { pending: "note" }
   return {
     gate: {
       kind: "registration",
-      ...(await buildOxideAccountBinding(keys, identity.nameHash as Hex)),
-      secret: REGISTRATION_MESSAGE_SECRET,
+      nameHash: toBytes(identity.nameHash as Hex),
+      ...bootstrapKeyProof(deriveBootstrapScalar(keys.secretKey)),
       leafIndex: new Fr(message.leafIndex),
     },
   }

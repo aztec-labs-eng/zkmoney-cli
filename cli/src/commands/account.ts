@@ -120,7 +120,10 @@ export function accountCommand(): Command {
       const rt = await boot(cmd.optsWithGlobals())
       try {
         const identity = await readIdentity(rt)
-        rememberIdentity(rt.config.home, rt.config.dir, identity)
+        rememberIdentity(rt.config.home, rt.config.dir, {
+          ...identity,
+          rollupVersion: rt.config.rollupVersion,
+        })
         print(
           fields([
             ["L2 address", identity.l2Address],

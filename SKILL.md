@@ -5,7 +5,7 @@ description: Operate a zk.money wallet from the terminal or from an agent - regi
 
 # zkmoney CLI
 
-`zkmoney` is a node CLI over the zk.money wallet SDK. It talks to Ethereum mainnet and Aztec mainnet by default, keeps its account and records under `~/.zkmoney/<network>/`, and prints plain text meant to be read; there is no JSON mode. Amounts are decimal strings in the asset's units (`"12.50"`), never base units.
+`zkmoney` is a node CLI over the zk.money wallet SDK. It talks to Ethereum mainnet and Aztec mainnet by default, keeps its account under `~/.zkmoney/<network>/` and each rollup's PXE and records under `~/.zkmoney/<network>/rollup-<version>/`, and prints plain text meant to be read; there is no JSON mode. Amounts are decimal strings in the asset's units (`"12.50"`), never base units.
 
 Install it on macOS or Linux (needs Node.js 22 or later and a signed-in `gh`) with `gh release download -R aztec-labs-eng/zkmoney-cli -p install.sh -O - | sh`, which puts `zkmoney` in `~/.local/bin`. From a source checkout (see the README), `cli/bin/zkmoney.mjs <command>` runs it from source. Add `ZKMONEY_DEBUG=1` to see the SDK's own logs.
 
@@ -15,9 +15,9 @@ The Aztec node each profile names sits behind a gateway key: save it once per ne
 
 | Profile | Chains | Config profile |
 | --- | --- | --- |
-| `mainnet` (default) | Ethereum and Aztec mainnet | `https://cdn.zk.money/profiles/v5/current.json` |
-| `staging` (also `testnet`) | Sepolia and Aztec testnet | `https://cdn.staging.zk.money/profiles/v5/current.json` |
-| `dev` | Sepolia and Aztec testnet, on the dev deployments | `https://cdn.dev.zk.money/profiles/v5/current.json` |
+| `mainnet` (default) | Ethereum and Aztec mainnet | `https://cdn.zk.money/profiles/v6/current.json` |
+| `staging` (also `testnet`) | Sepolia and Aztec testnet | `https://cdn.staging.zk.money/profiles/v6/current.json` |
+| `dev` | Sepolia and Aztec testnet, on the dev deployments | `https://cdn.dev.zk.money/profiles/v6/current.json` |
 
 The config profile carries the node, the L1 RPC, the account service and the contracts. It does not carry the key for Aztec Labs' node gateway, which answers 403 without one, so save each network's key once. On mainnet, also set your own Ethereum RPC: the profile's public one answers only recent blocks, and `balance`, deposits and registration scan older logs. Every setting but `profile` is kept per network:
 
@@ -82,7 +82,7 @@ zkmoney deposits get <address>
 zkmoney deposits list
 ```
 
-Each address takes DAI, USDC or USDT on mainnet (TST on testnet), once. Anything else sent there needs manual recovery. The depositor pays the sweep fee and the portal cut printed by `create`; the rest is credited in DAI on Aztec. Credit lands after the relayer sweeps and the next `balance` or `watch` tick claims it.
+Each address takes DAI, USDC or USDT on mainnet (TST on testnet), once. Anything else sent there needs manual recovery. The depositor pays the sweep fee printed by `create`; the rest is credited in DAI on Aztec. Credit lands after the relayer sweeps and the next `balance` or `watch` tick claims it.
 
 ## Reading state
 
@@ -127,7 +127,7 @@ zkmoney bridges recover br-1 [--to 0x…]   # free an escrow nobody ran, or one 
 
 A bridge is a withdrawal into an escrow on Ethereum (mainnet only). Oxide's relayer releases the burn to the escrow and runs it; the escrow swaps the DAI to USDC or USDT on Curve's 3pool, and Across or Circle's CCTP delivers it to `--to` on `--chain`. `--asset` defaults to USDC where a route delivers it, else USDT. Without `--via` the CLI quotes every route to that chain and takes the one that delivers the most. `--to` is an address on the destination chain or a saved Ethereum contact; on `hyperCore` it is the Hyperliquid account, which pays 1 USDC on its first deposit. The fees are the withdrawal's own, a DAI tip for whoever runs the escrow, and the bridge's fee. The output says what arrives at a 1:1 swap and at the swap's 1% floor. `--faster` pays a DAI prover tip for an early proof, as on `withdraw`. `bridges get` follows a bridge from burn to arrival. If the relayer never runs the escrow, `bridges recover` runs it. If Across refunds a deposit it could not fill, the refund sits in the escrow, and `bridges recover --to <address>` sends it to Ethereum. Both need `ZKMONEY_L1_PRIVATE_KEY` for gas. The escrow factories come from the oxide manifest, and `addresses.acrossBridgeEscrowFactory` and `addresses.cctpBridgeEscrowFactory` override it.
 
-`bridges quote` prices a bridge exactly as `bridge` would, and sends nothing. It never unlocks the account, signs, sends a transaction, claims a deposit or writes to `~/.zkmoney`, so it needs no passphrase and runs before `account init`. The amount is the DAI spent, fees included. The quote lists each fee: the withdrawal's release tip and portal cut, the prover tip with `--faster`, the escrow's run, the bridge's fee, and the destination's activation fee (HyperCore's 1 USDC on a new account's first deposit). It then shows what arrives at a 1:1 swap and at the swap's floor, and the proof's wait with and without a prover tip; the wait needs the node key, and shows as unknown without it. Every quote carries the time it was priced. An amount too small for the fees, a bridge's limits or the destination's minimum is refused with the reason. Prices move with gas and the bridges' fees, so `bridge` prices the route again when it submits, and that is the price it commits to.
+`bridges quote` prices a bridge exactly as `bridge` would, and sends nothing. It never unlocks the account, signs, sends a transaction, claims a deposit or writes to `~/.zkmoney`, so it needs no passphrase and runs before `account init`. The amount is the DAI spent, fees included. The quote lists each fee: the withdrawal's release tip and the executor's fee, the prover tip with `--faster`, the escrow's run, the bridge's fee, and the destination's activation fee (HyperCore's 1 USDC on a new account's first deposit). It then shows what arrives at a 1:1 swap and at the swap's floor, and the proof's wait with and without a prover tip; the wait needs the node key, and shows as unknown without it. Every quote carries the time it was priced. An amount too small for the fees, a bridge's limits or the destination's minimum is refused with the reason. Prices move with gas and the bridges' fees, so `bridge` prices the route again when it submits, and that is the price it commits to.
 
 ## Paylinks
 

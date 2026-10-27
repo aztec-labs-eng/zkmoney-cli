@@ -7,7 +7,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto"
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { Fr } from "@aztec/aztec.js/fields"
+import { Fr } from "@aztec-labs/aztec.js/fields"
 import { MSK_PRF_SALT } from "@obsidion/core/constants"
 import { deriveMskFromPrfOutput } from "@obsidion/sdk"
 import { type Authenticator, contextualizedPrfSalt } from "./authenticator.ts"
@@ -31,6 +31,8 @@ export interface AccountFile {
   /** Filled in once the account has been derived or registered. */
   identity?: {
     l2Address: string
+    /** The rollup `l2Address` was derived on; absent on files a v5 CLI wrote. */
+    rollupVersion?: string
     l1Account?: string
     tag?: string
   }

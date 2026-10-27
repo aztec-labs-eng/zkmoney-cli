@@ -1,26 +1,25 @@
 /** The attested co-signer for oxide-token batches, loaded once per process for services other than the TokenService. */
 import { createOxideTeeSignerSource } from "../frontCore.ts"
-import type { TeeSigner } from "@obsidion/sdk"
+import type { RegisteredTeeSigner } from "@obsidion/sdk"
 import { fail } from "../output.ts"
 import type { Runtime } from "./boot.ts"
 
-const signers = new WeakMap<Runtime, Promise<TeeSigner | undefined>>()
+const signers = new WeakMap<Runtime, Promise<RegisteredTeeSigner | undefined>>()
 
-export function teeSignerFor(rt: Runtime): Promise<TeeSigner | undefined> {
+export function teeSignerFor(rt: Runtime): Promise<RegisteredTeeSigner | undefined> {
   let signer = signers.get(rt)
   if (!signer) {
     signer = createOxideTeeSignerSource({
       l1RpcUrl: rt.config.l1RpcUrl.value,
       l1Chain: rt.l1Chain,
-      getNode: () => rt.node,
-      getTokenAddress: () => rt.contractService.getContractAddress("oxideToken"),
+      getTuple: () => rt.tuple,
     }).load()
     signers.set(rt, signer)
   }
   return signer
 }
 
-export async function requireTeeSigner(rt: Runtime): Promise<TeeSigner> {
+export async function requireTeeSigner(rt: Runtime): Promise<RegisteredTeeSigner> {
   const signer = await teeSignerFor(rt)
   if (!signer)
     fail(

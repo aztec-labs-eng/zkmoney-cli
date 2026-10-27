@@ -2,50 +2,54 @@
  * SIPA deposits for this account: an L1 address whose sweeps credit only this account, published
  * through a ClaimFPC-sponsored broadcast so oxide's relayer sweeps whatever lands there, and the
  * recipient-side discovery and claim that turn each sweep into balance. The address is derived here,
- * not asked of the resolver: ECDH is symmetric, so the account's stealth key against the resolver's
- * registry key reproduces exactly what the resolver would derive. The broadcast is the one proof;
- * a first-ever one folds the rail's deferred subscription into the same tx. Records live in
- * front-core's `SIPADepositStore` over the file store, so the activity feed reads them too.
+ * not asked of the resolver: its salts come from the wallet's own keys, and the broadcast tells the
+ * relayer it exists. A first-ever broadcast folds the rail's deferred subscription into the same
+ * tx. Records live in front-core's `SIPADepositStore` over the file store, so the activity feed
+ * reads them too.
  */
 import { randomUUID } from "node:crypto"
-import { NO_FROM } from "@aztec/aztec.js/account"
-import { AztecAddress } from "@aztec/stdlib/aztec-address"
-import { TxHash } from "@aztec/stdlib/tx"
+import { NO_FROM } from "@aztec-labs/aztec.js/account"
+import { AztecAddress } from "@aztec-labs/stdlib/aztec-address"
+import { TxHash } from "@aztec-labs/stdlib/tx"
 import { erc20Abi, formatUnits, type Address, type Hex } from "viem"
 import type { LegacySipaDeployArgs } from "@oxide/l1-contracts/legacy_sipa.js"
-import { DEFAULT_CONTRACTS, quotedDepositFee } from "@obsidion/core/constants"
+import { DEFAULT_CONTRACTS } from "@obsidion/core/constants"
+import {
+  loadOxideDeployment,
+  type OxideDeploymentTable,
+  type SipaIntentName,
+} from "@obsidion/core/oxide"
 import type { OxideEnvTuple } from "@obsidion/core/types"
 import {
   BroadcasterContract,
   OxideSipaIntent,
   OxideTokenContract,
   SipaSelfResolver,
-  TX_AMOUNT_CAP,
   assertSubsidySweepsSipa,
   buildClaimSponsorPayload,
   buildClaimSubscribePayload,
   buildSipaSweepBroadcasts,
   chainEpochDay,
   claimFpcSponsoredFee,
-  deriveSharedSecret,
+  deriveSelfSipaSecret,
   ensureContractRegisteredInPXE,
   fetchSipaEvents,
   getBroadcasterArtifact,
-  readDepositFee,
-  readFpcFundingCut,
+  readDeploymentTable,
   readSipaFundingStatus,
+  readSipaPortalTerms,
   selfSipaNonce,
   type ClaimSponsorContext,
   type SelfResolvedSipa,
   type SipaDeployArgs,
   type SipaFundingStatus,
-  type SipaResolverOperatorRecord,
+  type SipaSweepRoute,
 } from "@obsidion/sdk"
 import {
   ContactStorage,
   SIPADepositStore,
   createOxideL1Reader,
-  depositSipaImplementation,
+  deploymentSipaRoute,
   deriveBootstrapKey,
   deriveStealthKey,
   getActiveNetworkId,
@@ -53,9 +57,12 @@ import {
   isLoggingEnabled,
   isSettledSipaPhase,
   resolveOxideAccountFactory,
+  selfSipaResolverKeys,
   setActiveNetworkId,
   setLoggingEnabled,
   setupSipaDiscovery,
+  sipaRows,
+  sipaSweepRoutes,
   syncSipaDeposits,
   trackSubmission,
   upsertDepositL1WalletContact,
@@ -64,6 +71,7 @@ import {
   type SipaDiscoverySetup,
   type SipaFundingToken,
   type SipaOrigin,
+  type SipaRow,
 } from "../frontCore.ts"
 import type { Runtime } from "./boot.ts"
 import {
@@ -117,39 +125,62 @@ export function depositTokens(rt: Runtime): Promise<DepositTokens> {
   return pending
 }
 
-/** What a depositor is quoted, read live off the portal's deposit implementation and the portal. */
+/**
+ * What a depositor is quoted, read live off the forwarding table's deposit row and the portal. The
+ * table's owner can change the row, so nothing here is kept for the life of an address.
+ */
 export interface DepositFacts extends DepositTokens {
-  /** The relayer's sweep fee, manifest-token base units. */
-  sweepFee: bigint
-  /** The portal's funding cut, manifest-token base units. */
-  fpcFundingCut: bigint
-  /** Both halves: the whole fee a deposit pays. */
+  /** The sweep fee, manifest-token base units: the row's tip plus its beneficiary fee. */
   fee: bigint
   /** The most one deposit may credit, manifest-token base units. */
   cap: bigint
-  implementation: Address
 }
 
 export async function readDepositFacts(rt: Runtime): Promise<DepositFacts> {
-  const tokens = await depositTokens(rt)
-  const portal = field(rt.tuple, "portal") as Address
-  const implementation = await depositSipaImplementation(
-    rt.l1,
-    field(rt.tuple, "sipaFactory") as Address,
-    portal,
-  )
-  const [sweepFee, fpcFundingCut] = await Promise.all([
-    readDepositFee(rt.l1, implementation),
-    readFpcFundingCut(rt.l1, portal),
+  const [tokens, terms] = await Promise.all([
+    depositTokens(rt),
+    readSipaPortalTerms(rt.l1, deploymentSipaRoute(rt.tuple)),
   ])
-  return {
-    ...tokens,
-    sweepFee,
-    fpcFundingCut,
-    fee: quotedDepositFee(sweepFee, fpcFundingCut),
-    cap: TX_AMOUNT_CAP,
-    implementation,
+  return { ...tokens, fee: terms.depositFee, cap: terms.txAmountCap }
+}
+
+const tables = new WeakMap<Runtime, Promise<OxideDeploymentTable>>()
+
+/** The forwarding table the deployment's SIPAs commit to, its rows read once per process. */
+export function deploymentTable(rt: Runtime): Promise<OxideDeploymentTable> {
+  let pending = tables.get(rt)
+  if (!pending) {
+    pending = (async () => {
+      const { deployment } = await loadOxideDeployment({
+        manifestUrl: rt.config.oxide.manifestUrl,
+        portal: rt.config.addressOverrides.portal ?? rt.config.oxide.portal,
+        network: rt.network,
+        expectedGitSha: rt.config.oxide.expectedGitSha,
+      })
+      return readDeploymentTable(rt.l1, deployment)
+    })().catch((err) => {
+      tables.delete(rt)
+      throw err
+    })
+    tables.set(rt, pending)
   }
+  return pending
+}
+
+/** The sweeps a SIPA needs for `intent`: every token the table accepts, each through its row's subsidy. */
+export async function sweepRoutes(rt: Runtime, intent: SipaIntentName): Promise<SipaSweepRoute[]> {
+  return sipaSweepRoutes(await deploymentTable(rt), rt.config.l1ChainId, intent)
+}
+
+/** The table's rows as the deposit sync reads them, each token named by its ERC-20. */
+export async function depositRows(rt: Runtime): Promise<SipaRow[]> {
+  return sipaRows(await deploymentTable(rt), rt.config.l1ChainId, async (address) => {
+    const [symbol, decimals] = await Promise.all([
+      rt.l1.readContract({ address, abi: erc20Abi, functionName: "symbol" }),
+      rt.l1.readContract({ address, abi: erc20Abi, functionName: "decimals" }),
+    ])
+    return { symbol, decimals }
+  })
 }
 
 export async function depositStore(rt: Runtime): Promise<SIPADepositStore> {
@@ -204,21 +235,11 @@ interface Derived extends SelfResolvedSipa {
   user: AztecAddress
 }
 
-/** The address for `(day, nonce)`: the stealth ECDH against the resolver's key, then the factory's CREATE2. */
-async function derive(
-  rt: Runtime,
-  keys: Keys,
-  resolver: SipaResolverOperatorRecord,
-  day: number,
-  nonce: number,
-): Promise<Derived> {
+/** The address for `(day, nonce)`: the salts from the wallet's own keys, then the factory's CREATE2. */
+async function derive(rt: Runtime, keys: Keys, day: number, nonce: number): Promise<Derived> {
   const tuple = rt.tuple
   const user = keys.account.getAddress()
-  const stealth = deriveStealthKey(keys.secretKey)
-  const resolved = await new SipaSelfResolver(
-    stealth.scalar,
-    resolver.resolverPublicKey,
-  ).resolveAddress({
+  const resolved = await new SipaSelfResolver(selfSipaResolverKeys(keys.secretKey)).resolveAddress({
     protocol: tuple.sipaRecoveryProtocol ?? "legacy-eoa",
     user,
     recoveryAccount: await recoveryAccountOf(rt, keys),
@@ -226,7 +247,7 @@ async function derive(
     nonce,
     publicClient: rt.l1,
     sipaFactory: field(tuple, "sipaFactory") as Address,
-    portal: field(tuple, "portal") as Address,
+    forwardingTable: field(tuple, "forwardingTable") as Address,
     rollupVersion: BigInt(field(tuple, "rollupVersion")),
   })
   return { ...resolved, user }
@@ -279,33 +300,24 @@ async function recordDerivation(
  * secret, so slot k is used when its secret is among them. Covers another device, or this store
  * before it was cleared.
  */
-async function usedSlotsToday(
-  rt: Runtime,
-  keys: Keys,
-  resolver: SipaResolverOperatorRecord,
-  day: number,
-): Promise<number> {
+async function usedSlotsToday(rt: Runtime, keys: Keys, day: number): Promise<number> {
   const events = await fetchSipaEvents(
     rt.wallet,
     AztecAddress.fromStringUnsafe(field(rt.tuple, "l2Token")),
     keys.account.getAddress(),
   )
   const salts = new Set(events.map((e) => e.sharedSecretSalt.toString()))
-  const scalar = deriveStealthKey(keys.secretKey).scalar
+  const { selfSipaKey } = selfSipaResolverKeys(keys.secretKey)
   let used = 0
-  while (
-    salts.has(
-      deriveSharedSecret(resolver.resolverPublicKey, scalar, day, selfSipaNonce(used)).toString(),
-    )
-  )
-    used++
+  while (salts.has(deriveSelfSipaSecret(selfSipaKey, day, selfSipaNonce(used)).toString())) used++
   return used
 }
 
 /**
- * Whether `sipa` already has code, so its sweep skips the deploy. Before a deploy, the subsidy is
- * checked to deploy `sipa` itself: it derives the address from its own portal and factory, and a
- * funded address it would not deploy is never swept. A legacy SIPA deploys from its own args.
+ * Whether `sipa` already has code, so its sweep skips the deploy. Before a deploy, each route's
+ * subsidy is checked to deploy `sipa` itself: it derives the address from its own factory and the
+ * broadcast's table, and a funded address it would not deploy is never swept. A legacy SIPA deploys
+ * from its own args.
  */
 export async function sipaDeployed(
   rt: Runtime,
@@ -314,6 +326,7 @@ export async function sipaDeployed(
     intent: OxideSipaIntent
     deployArgs: SipaDeployArgs | LegacySipaDeployArgs
     intentData: Hex
+    routes: readonly SipaSweepRoute[]
   },
 ): Promise<boolean> {
   const { sipa, deployArgs } = params
@@ -323,8 +336,6 @@ export async function sipaDeployed(
     await assertSubsidySweepsSipa(rt.l1, {
       ...params,
       deployArgs,
-      depositSubsidy: field(rt.tuple, "depositSubsidy") as Address,
-      portal: field(rt.tuple, "portal") as Address,
       sipaFactory: field(rt.tuple, "sipaFactory") as Address,
     })
   return false
@@ -345,11 +356,13 @@ async function broadcast(
 ): Promise<string> {
   const tuple = rt.tuple
   const { user, sipaAddress, sipaArgs, intent, resolution } = derived
+  const routes = await sweepRoutes(rt, "deposit")
   const deployed = await sipaDeployed(rt, {
     sipa: sipaAddress,
     intent: OxideSipaIntent.Deposit,
     deployArgs: sipaArgs,
     intentData: intent.intentData,
+    routes,
   })
   const l2Token = AztecAddress.fromStringUnsafe(field(tuple, "l2Token"))
   const tokenArtifact = await rt.contractService.getArtifactForContract(
@@ -376,9 +389,8 @@ async function broadcast(
     intentData: intent.intentData,
     proofs: intent.proofs,
     operationExecutor: field(tuple, "operationExecutor") as Address,
-    depositSubsidy: field(tuple, "depositSubsidy") as Address,
     chainId: BigInt(rt.config.l1ChainId),
-    tokens: tokens.accepted.map((t) => t.address),
+    routes,
   })
   const innerCalls = (await Promise.all(interactions.map((call) => call.request()))).flatMap(
     (payload) => payload.calls,
@@ -460,7 +472,7 @@ export interface CreatedDeposit {
  */
 export async function createDeposit(rt: Runtime, request: DepositRequest): Promise<CreatedDeposit> {
   const keys = await keysOf(rt)
-  const [tokens, { resolver }] = await Promise.all([depositTokens(rt), ensureDiscovery(rt)])
+  const [tokens] = await Promise.all([depositTokens(rt), ensureDiscovery(rt)])
   await stampNetworkId(rt)
   const account = keys.account.getAddress().toString()
   const slots = new DepositSlots(
@@ -483,7 +495,7 @@ export async function createDeposit(rt: Runtime, request: DepositRequest): Promi
       await slots.put(slot)
       return { address: slot.address, name, txHash: pending.broadcastTxHash, slot, resumed: true }
     }
-    derived = await derive(rt, keys, resolver, pending.day, pending.nonce)
+    derived = await derive(rt, keys, pending.day, pending.nonce)
     // The user may already have shared `pending.address`; publishing anything else strands it.
     if (derived.sipaAddress.toLowerCase() !== pending.address.toLowerCase())
       fail(
@@ -493,10 +505,8 @@ export async function createDeposit(rt: Runtime, request: DepositRequest): Promi
     slot = { ...pending, request, broadcastTxHash: undefined }
   } else {
     const day = await chainEpochDay(rt.wallet)
-    const nonce = selfSipaNonce(
-      await slots.takeSlot(day, await usedSlotsToday(rt, keys, resolver, day)),
-    )
-    derived = await derive(rt, keys, resolver, day, nonce)
+    const nonce = selfSipaNonce(await slots.takeSlot(day, await usedSlotsToday(rt, keys, day)))
+    derived = await derive(rt, keys, day, nonce)
     slot = {
       address: derived.sipaAddress,
       day,
@@ -539,7 +549,7 @@ export async function syncDeposits(
   opts: { refreshBalance?: () => Promise<void> } = {},
 ): Promise<SipaDepositSyncResult> {
   const keys = await keysOf(rt)
-  const [tokens, tokenService] = await Promise.all([depositTokens(rt), rt.tokenService()])
+  const [rows, tokenService] = await Promise.all([depositRows(rt), rt.tokenService()])
   await ensureDiscovery(rt)
   await stampNetworkId(rt)
   ContactStorage.get(rt.storage)
@@ -550,15 +560,14 @@ export async function syncDeposits(
       publicClient: rt.l1,
       node: rt.node as never,
       wallet: rt.wallet,
-      tokenService,
+      tokenServiceFor: async () => tokenService,
       refreshBalance: opts.refreshBalance,
       store,
       tuple: rt.tuple,
       recipient: keys.account.getAddress(),
       stealthPublicKey: deriveStealthKey(keys.secretKey).publicKey,
       recoveryAccount,
-      token: tokens.token,
-      fundingTokens: tokens.accepted,
+      rows,
       l1ChainId: rt.config.l1ChainId,
       // A registration address is priced by its signed schedule, which this rail does not hold; its
       // phase is held for a pass that can price it.
@@ -590,9 +599,8 @@ async function readFunding(
     const status = await readSipaFundingStatus(rt.l1 as never, {
       sipa: record.sipaAddress,
       token: token.address,
-      implementation: facts.implementation,
-      fee: bigMax(facts.sweepFee, BigInt(record.registrationFee ?? 0)),
-      fpcFundingCut: facts.fpcFundingCut,
+      txAmountCap: facts.cap,
+      fee: bigMax(facts.fee, BigInt(record.registrationFee ?? 0)),
       balanceScale: feeScale(facts.token, token),
     })
     if (!best || status.scaledBalance > best.status.scaledBalance) best = { token, status }

@@ -84,8 +84,9 @@ const base: WithdrawalRecord = {
   amount: "100",
   rawAmount: (100n * 10n ** 18n).toString(),
   relayerTip: WITHDRAW_RELAYER_TIP.toString(),
-  fpcFundingCut: cut.toString(),
+  withdrawalFee: cut.toString(),
   tokenSymbol: "DAI",
+  tokenDecimals: 18,
   phase: "finalizing_l1",
   startTime: 1_700_000_000_000,
   l2TxHash: ("0x" + "0a".repeat(32)) as Hex,
@@ -121,7 +122,7 @@ describe("withdrawalSummary", () => {
   })
 
   it("hides the breakdown when the record carries no fee", () => {
-    const rows = withdrawalSummary({ ...base, relayerTip: undefined, fpcFundingCut: undefined })
+    const rows = withdrawalSummary({ ...base, relayerTip: undefined, withdrawalFee: undefined })
     expect(row(rows, "Fee")).toBeUndefined()
     expect(row(rows, "Receives")).toBeUndefined()
   })
